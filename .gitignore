@@ -1,0 +1,59 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.env
+*.egg-info/
+dist/
+build/
+*.spec
+
+# ── Large binary assets ────────────────────────────────────────────────────────
+# Copy these from MADScanner_AI with `make copy-assets`
+jar_libs/
+android/
+
+# ── Output / working directories ──────────────────────────────────────────────
+output/
+!/output/.gitkeep
+sootOutput/
+MADPro_Output/
+
+# ── Docker artifacts ──────────────────────────────────────────────────────────
+*.idsig
+
+# ── Java build artifacts ───────────────────────────────────────────────────────
+*.class
+*.jar
+!jar_libs/
+java/*.class
+
+# ── IDE / editor ──────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.swp
+*.swo
+*~
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+
+# ── Secrets / keys ────────────────────────────────────────────────────────────
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key

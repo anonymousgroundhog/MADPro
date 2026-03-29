@@ -12,7 +12,15 @@
       "Bash(java -version)",
       "Bash(python3:*)",
       "Bash(pip3 install:*)",
-      "Bash(sudo apt-get:*)"
+      "Bash(sudo apt-get:*)",
+      "Read(//home/sean/Android/Sdk/cmdline-tools/**)",
+      "Bash(echo \"ANDROID_HOME=$ANDROID_HOME\")",
+      "Bash(echo \"ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT\")",
+      "Bash(sdkmanager --list)",
+      "Bash(sdkmanager --version)",
+      "Bash(/usr/bin/sdkmanager --list)",
+      "Bash(~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager --list)",
+      "Bash(sort -t';' -k2 -V)"
     ]
   }
 }

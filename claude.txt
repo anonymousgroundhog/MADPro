@@ -1,0 +1,1660 @@
+╭─── Claude Code v2.1.86 ──────────────────────────────────────────────────────╮
+│                                            │ Tips for getting started        │
+│             Welcome back Sean!             │ Run /init to create a CLAUDE.m… │
+│                                            │ ─────────────────────────────── │
+│                   ▐▛███▜▌                  │ Recent activity                 │
+│                  ▝▜█████▛▘                 │ No recent activity              │
+│                    ▘▘ ▝▝                   │                                 │
+│                                            │                                 │
+│   Sonnet 4.6 · Claude Pro · Sean Sanders   │                                 │
+│     ~/Documents/Projects/GitHub/MADPro     │                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+✻ Conversation compacted (ctrl+o for history)
+
+  ⎿  Read gui/main_window.py (268 lines)
+  ⎿  Read views/download_view.py (147 lines)
+  ⎿  Read views/__init__.py (1 lines)
+  ⎿  Read gui/widgets/download_panel.py (224 lines)
+  ⎿  Read gui/widgets/category_panel.py (136 lines)
+
+  Read 2 files (ctrl+o to expand)
+
+● Now I'll add the download_gplay_emulator function to adb_manager.py and update
+   device_panel.py to show a download button when no devices are found.
+
+● Update(core/adb_manager.py)
+  ⎿  Added 89 lines
+       97          return False
+       98  
+       99  
+      100 +def is_sdkmanager_available() -> bool:                        
+      101 +    try:                                                      
+      102 +        subprocess.run(["sdkmanager", "--version"], capture_ou
+          +tput=True, timeout=10)                                        
+      103 +        return True                                           
+      104 +    except (FileNotFoundError, subprocess.TimeoutExpired):    
+      105 +        return False                                          
+      106 +                                                              
+      107 +                                                              
+      108 +GPLAY_AVD_NAME = "MADPro_GPlay"                               
+      109 +GPLAY_SYSTEM_IMAGE = "system-images;android-34;google_apis_pla
+          +ystore;x86_64"                                                
+      110 +                                                              
+      111 +                                                              
+      112 +def download_gplay_emulator(                                  
+      113 +    on_output: Callable[[str], None] | None = None,           
+      114 +    stop_event: threading.Event | None = None,                
+      115 +) -> bool:                                                    
+      116 +    """                                                       
+      117 +    Downloads the Google Play system image via sdkmanager and 
+          +creates an AVD.                                               
+      118 +    Returns True on success.                                  
+      119 +    """                                                       
+      120 +    def log(msg: str):                                        
+      121 +        if on_output:                                         
+      122 +            on_output(msg)                                    
+      123 +                                                              
+      124 +    if not is_sdkmanager_available():                         
+      125 +        log("ERROR: 'sdkmanager' not found. Install Android SD
+          +K command-line tools.")                                       
+      126 +        return False                                          
+      127 +                                                              
+      128 +    log(f"Downloading system image: {GPLAY_SYSTEM_IMAGE}")    
+      129 +    log("This may take several minutes depending on your conne
+          +ction speed...")                                              
+      130 +                                                              
+      131 +    try:                                                      
+      132 +        proc = subprocess.Popen(                              
+      133 +            ["sdkmanager", "--install", GPLAY_SYSTEM_IMAGE],  
+      134 +            stdin=subprocess.PIPE,                            
+      135 +            stdout=subprocess.PIPE,                           
+      136 +            stderr=subprocess.STDOUT,                         
+      137 +            text=True,                                        
+      138 +        )                                                     
+      139 +        # Accept the license automatically by sending 'y'     
+      140 +        try:                                                  
+      141 +            proc.stdin.write("y\n")                           
+      142 +            proc.stdin.flush()                                
+      143 +            proc.stdin.close()                                
+      144 +        except (BrokenPipeError, OSError):                    
+      145 +            pass                                              
+      146 +                                                              
+      147 +        for line in iter(proc.stdout.readline, ""):           
+      148 +            if stop_event and stop_event.is_set():            
+      149 +                proc.terminate()                              
+      150 +                log("Download cancelled.")                    
+      151 +                return False                                  
+      152 +            line = line.rstrip()                              
+      153 +            if line:                                          
+      154 +                log(line)                                     
+      155 +                                                              
+      156 +        proc.wait()                                           
+      157 +        if proc.returncode != 0:                              
+      158 +            log(f"ERROR: sdkmanager exited with code {proc.ret
+          +urncode}")                                                    
+      159 +            return False                                      
+      160 +    except FileNotFoundError:                                 
+      161 +        log("ERROR: 'sdkmanager' not found.")                 
+      162 +        return False                                          
+      163 +                                                              
+      164 +    log(f"Creating AVD: {GPLAY_AVD_NAME}")                    
+      165 +    try:                                                      
+      166 +        result = subprocess.run(                              
+      167 +            [                                                 
+      168 +                "avdmanager", "create", "avd",                
+      169 +                "-n", GPLAY_AVD_NAME,                         
+      170 +                "-k", GPLAY_SYSTEM_IMAGE,                     
+      171 +                "--force",                                    
+      172 +            ],                                                
+      173 +            input="no\n",  # don't create custom hardware prof
+          +ile                                                           
+      174 +            capture_output=True,                              
+      175 +            text=True,                                        
+      176 +            timeout=60,                                       
+      177 +        )                                                     
+      178 +        if result.returncode != 0:                            
+      179 +            log(f"ERROR: avdmanager failed: {result.stderr.str
+          +ip()}")                                                       
+      180 +            return False                                      
+      181 +    except (FileNotFoundError, subprocess.TimeoutExpired) as e
+          +:                                                             
+      182 +        log(f"ERROR: avdmanager failed: {e}")                 
+      183 +        return False                                          
+      184 +                                                              
+      185 +    log(f"AVD '{GPLAY_AVD_NAME}' created successfully with Goo
+          +gle Play support.")                                           
+      186 +    return True                                               
+      187 +                                                              
+      188 +                                                              
+      189  def wait_for_boot(serial: str, timeout: int = 120) -> bool:
+      190      """
+      191      Polls adb until the emulator reports sys.boot_completed=1.
+
+● Now update device_panel.py to show the download button when no devices are
+  connected and no AVDs exist, and wire up the download flow:
+
+● Update(gui/widgets/device_panel.py)
+  ⎿  Added 37 lines, removed 1 line
+      106              self, text="", font=styles.FONT_SMALL,
+      107              text_color=styles.TEXT_MUTED)
+      108          self._emu_status.pack(anchor="w", padx=styles.PAD,
+      109 -                               pady=(0, styles.PAD))          
+      109 +                               pady=(0, styles.PAD_SMALL))    
+      110  
+      111 +        # Download Google Play emulator section (hidden by def
+          +ault)                                                         
+      112 +        self._gplay_frame = ctk.CTkFrame(self, fg_color=styles
+          +.BG_CARD,                                                     
+      113 +                                          corner_radius=styles
+          +.CORNER_RADIUS)                                               
+      114 +                                                              
+      115 +        ctk.CTkLabel(                                         
+      116 +            self._gplay_frame,                                
+      117 +            text="No AVDs found. Download a Google Play emulat
+          +or?",                                                         
+      118 +            font=styles.FONT_SMALL,                           
+      119 +            text_color=styles.TEXT_SECONDARY,                 
+      120 +            wraplength=280,                                   
+      121 +        ).pack(anchor="w", padx=styles.PAD_SMALL, pady=(styles
+          +.PAD_SMALL, 4))                                               
+      122 +                                                              
+      123 +        self._dl_btn = ctk.CTkButton(                         
+      124 +            self._gplay_frame,                                
+      125 +            text="Download Google Play Emulator",             
+      126 +            font=styles.FONT_SMALL,                           
+      127 +            fg_color=styles.ACCENT,                           
+      128 +            hover_color=styles.ACCENT_HOVER,                  
+      129 +            command=self._start_gplay_download,               
+      130 +        )                                                     
+      131 +        self._dl_btn.pack(fill="x", padx=styles.PAD_SMALL,    
+      132 +                           pady=(0, styles.PAD_SMALL))        
+      133 +                                                              
+      134 +        self._dl_log = ctk.CTkLabel(                          
+      135 +            self._gplay_frame, text="",                       
+      136 +            font=styles.FONT_SMALL, text_color=styles.TEXT_SEC
+          +ONDARY,                                                       
+      137 +            wraplength=280, justify="left", anchor="w",       
+      138 +        )                                                     
+      139 +        self._dl_log.pack(fill="x", padx=styles.PAD_SMALL,    
+      140 +                           pady=(0, styles.PAD_SMALL))        
+      141 +                                                              
+      142 +        self._dl_stop_event: threading.Event | None = None    
+      143 +                                                              
+      144 +        # Spacing at bottom                                   
+      145 +        ctk.CTkFrame(self, fg_color="transparent", height=styl
+          +es.PAD_SMALL).pack()                                          
+      146 +                                                              
+      147          # Load AVDs in background
+      148          threading.Thread(target=self._load_avds, daemon=True).
+           start()
+      149  
+
+● Now update _update_avds to show/hide the download section, and add the
+  download method:
+
+● Update(gui/widgets/device_panel.py)
+  ⎿  Added 7 lines, removed 1 line
+      216          self._avds = avds
+      217          if avds:
+      218              self._avd_menu.configure(values=avds)
+      219 -            self._avd_var.set(avds[0])                        
+      219 +            # Auto-select MADPro_GPlay if present, else first 
+      220 +            from core.adb_manager import GPLAY_AVD_NAME       
+      221 +            preferred = GPLAY_AVD_NAME if GPLAY_AVD_NAME in av
+          +ds else avds[0]                                               
+      222 +            self._avd_var.set(preferred)                      
+      223 +            self._gplay_frame.pack_forget()                   
+      224          else:
+      225              self._avd_menu.configure(values=["No AVDs found"])
+      226              self._avd_var.set("No AVDs found")
+      227 +            self._gplay_frame.pack(fill="x", padx=styles.PAD, 
+      228 +                                    pady=(0, styles.PAD))     
+      229  
+      230      def _start_emulator(self):
+      231          avd = self._avd_var.get()
+
+● Now add the download methods before the _stop_emulator method:
+
+● Update(gui/widgets/device_panel.py)
+  ⎿  Added 36 lines
+      281          self.after(0, lambda: self._emu_status.configure(text=
+           msg, text_color=color))
+      282          self.after(0, self._refresh_devices)
+      283  
+      284 +    def _start_gplay_download(self):                          
+      285 +        self._dl_btn.configure(state="disabled", text="Downloa
+          +ding...")                                                     
+      286 +        self._dl_log.configure(text="Starting download...", te
+          +xt_color=styles.INFO)                                         
+      287 +        self._dl_stop_event = threading.Event()               
+      288 +                                                              
+      289 +        def worker():                                         
+      290 +            from core.adb_manager import download_gplay_emulat
+          +or                                                            
+      291 +            success = download_gplay_emulator(                
+      292 +                on_output=lambda msg: self.after(0, lambda m=m
+          +sg: self._on_dl_log(m)),                                      
+      293 +                stop_event=self._dl_stop_event,               
+      294 +            )                                                 
+      295 +            self.after(0, lambda: self._on_gplay_done(success)
+          +)                                                             
+      296 +                                                              
+      297 +        threading.Thread(target=worker, daemon=True).start()  
+      298 +                                                              
+      299 +    def _on_dl_log(self, msg: str):                           
+      300 +        # Show last non-empty line in the label               
+      301 +        if msg.strip():                                       
+      302 +            # Truncate long lines for the compact label       
+      303 +            display = msg.strip()                             
+      304 +            if len(display) > 80:                             
+      305 +                display = display[:77] + "..."                
+      306 +            self._dl_log.configure(text=display)              
+      307 +                                                              
+      308 +    def _on_gplay_done(self, success: bool):                  
+      309 +        self._dl_btn.configure(state="normal", text="Download 
+          +Google Play Emulator")                                        
+      310 +        if success:                                           
+      311 +            self._dl_log.configure(                           
+      312 +                text="Download complete. Refreshing AVD list..
+          +.",                                                           
+      313 +                text_color=styles.SUCCESS)                    
+      314 +            threading.Thread(target=self._load_avds, daemon=Tr
+          +ue).start()                                                   
+      315 +        else:                                                 
+      316 +            self._dl_log.configure(                           
+      317 +                text="Download failed. Check that sdkmanager i
+          +s in your PATH.",                                             
+      318 +                text_color=styles.ERROR)                      
+      319 +                                                              
+      320      def _stop_emulator(self):
+      321          # Try graceful adb emu kill first
+      322          emu_device = next(
+
+● Let me verify the final state of the device panel looks correct:
+
+  Read 1 file (ctrl+o to expand)
+
+● The implementation looks good. Here's what was added:
+
+  core/adb_manager.py — new download_gplay_emulator() function that:
+  1. Checks sdkmanager is available
+  2. Runs sdkmanager --install 
+  "system-images;android-34;google_apis_playstore;x86_64" (streaming output,
+  auto-accepts the license with y)
+  3. Runs avdmanager create avd -n MADPro_GPlay -k <image> --force
+  4. Supports stop_event cancellation
+  5. Exports GPLAY_AVD_NAME = "MADPro_GPlay" constant
+
+  gui/widgets/device_panel.py — when _update_avds() finds no AVDs:
+  - Shows a compact panel with a "Download Google Play Emulator" button and a
+  status line
+  - Clicking it disables the button and streams progress messages into the
+  status label (truncated at 80 chars)
+  - On success: refreshes the AVD list, auto-selects MADPro_GPlay if present
+  - On failure: shows error with guidance to check sdkmanager PATH
+  - Panel hides itself when AVDs are found
+
+✻ Worked for 4m 2s
+
+❯ Got the following errors [Image #14]                                          
+  ⎿  [Image #14]
+
+● The error "Download failed. Check that sdkmanager is in your PATH" means
+  sdkmanager isn't found. But also, looking at the UI — the download section
+  appeared immediately (even before clicking anything), which means the "no
+  AVDs" check triggered right away and showed the error after _load_avds found
+  nothing and auto-ran the download...
+
+  Wait, no — looking more carefully, the download failed message appeared but
+  the button is still enabled. The user must have clicked it and sdkmanager
+  wasn't found. The real issue is sdkmanager not being in PATH.
+
+  Let me update the UI to show a more helpful message that includes how to
+  find/install sdkmanager, and also check common SDK locations automatically:
+
+● Update(core/adb_manager.py)
+  ⎿  Added 41 lines, removed 5 lines
+       97          return False
+       98  
+       99  
+      100 +def _find_sdk_tool(name: str) -> str | None:                  
+      101 +    """                                                       
+      102 +    Returns the full path to an Android SDK tool, checking com
+          +mon install                                                   
+      103 +    locations in addition to whatever is already on PATH.     
+      104 +    """                                                       
+      105 +    import shutil                                             
+      106 +    import os                                                 
+      107 +                                                              
+      108 +    # Check PATH first                                        
+      109 +    found = shutil.which(name)                                
+      110 +    if found:                                                 
+      111 +        return found                                          
+      112 +                                                              
+      113 +    # Common SDK root locations                               
+      114 +    home = os.path.expanduser("~")                            
+      115 +    candidates = [                                            
+      116 +        os.path.join(home, "Android", "Sdk"),                 
+      117 +        os.path.join(home, "android-sdk"),                    
+      118 +        "/opt/android-sdk",                                   
+      119 +        "/usr/local/android-sdk",                             
+      120 +        os.environ.get("ANDROID_HOME", ""),                   
+      121 +        os.environ.get("ANDROID_SDK_ROOT", ""),               
+      122 +    ]                                                         
+      123 +                                                              
+      124 +    # sdkmanager lives in cmdline-tools/<version>/bin/ or tool
+          +s/bin/                                                        
+      125 +    for sdk_root in filter(None, candidates):                 
+      126 +        cmdline_tools = os.path.join(sdk_root, "cmdline-tools"
+          +)                                                             
+      127 +        if os.path.isdir(cmdline_tools):                      
+      128 +            for entry in sorted(os.listdir(cmdline_tools), rev
+          +erse=True):                                                   
+      129 +                candidate = os.path.join(cmdline_tools, entry,
+          + "bin", name)                                                 
+      130 +                if os.path.isfile(candidate) and os.access(can
+          +didate, os.X_OK):                                             
+      131 +                    return candidate                          
+      132 +        # Legacy tools/bin                                    
+      133 +        legacy = os.path.join(sdk_root, "tools", "bin", name) 
+      134 +        if os.path.isfile(legacy) and os.access(legacy, os.X_O
+          +K):                                                           
+      135 +            return legacy                                     
+      136 +                                                              
+      137 +    return None                                               
+      138 +                                                              
+      139 +                                                              
+      140  def is_sdkmanager_available() -> bool:
+      101 -    try:                                                      
+      102 -        subprocess.run(["sdkmanager", "--version"], capture_ou
+          -tput=True, timeout=10)                                        
+      103 -        return True                                           
+      104 -    except (FileNotFoundError, subprocess.TimeoutExpired):    
+      105 -        return False                                          
+      141 +    return _find_sdk_tool("sdkmanager") is not None           
+      142  
+      143  
+      144  GPLAY_AVD_NAME = "MADPro_GPlay"
+
+● Now update download_gplay_emulator to use the resolved path:
+
+● Update(core/adb_manager.py)
+  ⎿  Added 13 lines, removed 3 lines
+      157          if on_output:
+      158              on_output(msg)
+      159  
+      160 -    if not is_sdkmanager_available():                         
+      161 -        log("ERROR: 'sdkmanager' not found. Install Android SD
+          -K command-line tools.")                                       
+      160 +    sdkmanager = _find_sdk_tool("sdkmanager")                 
+      161 +    if not sdkmanager:                                        
+      162 +        log("ERROR: 'sdkmanager' not found.")                 
+      163 +        log("Install Android SDK command-line tools from:")   
+      164 +        log("  https://developer.android.com/studio#command-to
+          +ols")                                                         
+      165 +        log("Then ensure ANDROID_HOME or ANDROID_SDK_ROOT is s
+          +et, or add")                                                  
+      166 +        log("  $ANDROID_HOME/cmdline-tools/latest/bin  to your
+          + PATH.")                                                      
+      167          return False
+      168  
+      169 +    avdmanager = _find_sdk_tool("avdmanager")                 
+      170 +    if not avdmanager:                                        
+      171 +        log("ERROR: 'avdmanager' not found in SDK. Re-install 
+          +cmdline-tools.")                                              
+      172 +        return False                                          
+      173 +                                                              
+      174      log(f"Downloading system image: {GPLAY_SYSTEM_IMAGE}")
+      175      log("This may take several minutes depending on your conne
+           ction speed...")
+      176  
+      177      try:
+      178          proc = subprocess.Popen(
+      169 -            ["sdkmanager", "--install", GPLAY_SYSTEM_IMAGE],  
+      179 +            [sdkmanager, "--install", GPLAY_SYSTEM_IMAGE],    
+      180              stdin=subprocess.PIPE,
+      181              stdout=subprocess.PIPE,
+      182              stderr=subprocess.STDOUT,
+
+● Now update the avdmanager call in the same function to use the resolved path:
+
+● Update(core/adb_manager.py)
+  ⎿  Added 1 line, removed 1 line
+      211      try:
+      212          result = subprocess.run(
+      213              [
+      214 -                "avdmanager", "create", "avd",                
+      214 +                avdmanager, "create", "avd",                  
+      215                  "-n", GPLAY_AVD_NAME,
+      216                  "-k", GPLAY_SYSTEM_IMAGE,
+      217                  "--force",
+
+● Also update list_avds to use the resolved path:
+
+● Update(core/adb_manager.py)
+  ⎿  Added 4 lines, removed 1 line
+      46  
+      47  def list_avds() -> list[str]:
+      48      """Returns list of AVD names from avdmanager."""
+      49 +    avdmanager = _find_sdk_tool("avdmanager")                  
+      50 +    if not avdmanager:                                         
+      51 +        return []                                              
+      52      try:
+      53          result = subprocess.run(
+      51 -            ["avdmanager", "list", "avd", "-c"],               
+      54 +            [avdmanager, "list", "avd", "-c"],                 
+      55              capture_output=True, text=True, timeout=15
+      56          )
+      57          return [line.strip() for line in result.stdout.splitlin
+          es() if line.strip()]
+
+● Now update the error message in device_panel.py to show more detail when
+  sdkmanager isn't found:
+
+● Update(gui/widgets/device_panel.py)
+  ⎿  Added 1 line, removed 1 line
+      314              threading.Thread(target=self._load_avds, daemon=Tr
+           ue).start()
+      315          else:
+      316              self._dl_log.configure(
+      317 -                text="Download failed. Check that sdkmanager i
+          -s in your PATH.",                                             
+      317 +                text="Download failed — see log above. Install
+          + Android SDK cmdline-tools and set ANDROID_HOME.",            
+      318                  text_color=styles.ERROR)
+      319  
+      320      def _stop_emulator(self):
+● Also, the download log label is too small to show multi-line errors. Let me
+  make it scroll the messages to the log panel via the parent view instead —
+  actually the device panel doesn't have access to the log. Let me instead make
+  the label show the last meaningful message but expand the _gplay_frame to show
+   more lines:
+
+● Update(gui/widgets/device_panel.py)
+  ⎿  Added 3 lines, removed 5 lines
+      297          threading.Thread(target=worker, daemon=True).start()
+      298  
+      299      def _on_dl_log(self, msg: str):
+      300 -        # Show last non-empty line in the label               
+      300          if msg.strip():
+      302 -            # Truncate long lines for the compact label       
+      301              display = msg.strip()
+      304 -            if len(display) > 80:                             
+      305 -                display = display[:77] + "..."                
+      306 -            self._dl_log.configure(text=display)              
+      302 +            if len(display) > 70:                             
+      303 +                display = display[:67] + "..."                
+      304 +            self._dl_log.configure(text=display, text_color=st
+          +yles.TEXT_SECONDARY)                                          
+      305  
+      306      def _on_gplay_done(self, success: bool):
+      307          self._dl_btn.configure(state="normal", text="Download 
+           Google Play Emulator")
+
+● The core fix is the _find_sdk_tool() helper that searches common Android SDK
+  install locations (~/Android/Sdk, /opt/android-sdk, $ANDROID_HOME, etc.)
+  instead of relying solely on PATH. This is the typical case on Linux where
+  sdkmanager is installed via Android Studio but not added to PATH.
+
+  If the user still gets the error, they need to either:
+  1. Set ANDROID_HOME=~/Android/Sdk in their environment, or
+  2. Install cmdline-tools: download from
+  developer.android.com/studio#command-tools
+
+✻ Sautéed for 51s
+
+❯ Allow the user to install google play emulator that has the google play store 
+
+● The current implementation already tries to do this, but sdkmanager isn't
+  found. The real gap is that we should let the user install the Android SDK
+  command-line tools themselves if they don't have them — or better, detect if
+  Android Studio is installed and use its bundled SDK.
+
+  Let me check what's actually available on the system and what the current
+  state of the code is:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Bash(which avdmanager 2>/dev/null || echo "avdmanager not in PATH"; ls
+      ~/Android/Sdk/cmdline-tools/latest/bin/ 2>/dev/null; sdkmanager --list
+      2>/dev/null | grep -i "…)
+  ⎿  avdmanager not in PATH
+     apkanalyzer
+     avdmanager
+     … +8 lines (ctrl+o to expand)
+
+● avdmanager is at ~/Android/Sdk/cmdline-tools/latest/bin/avdmanager but not in
+  PATH, and sdkmanager at /usr/bin/sdkmanager is the system one. The
+  _find_sdk_tool helper should find it. Let me check why it failed — the system
+  sdkmanager at /usr/bin/sdkmanager likely can't install Android system images.
+  Let me check:
+
+● Bash(sdkmanager --version 2>&1; echo "---"; /usr/bin/sdkmanager --list 2>&1 |
+      head -5)
+  ⎿  /home/sean/.local/lib/python3.10/site-packages/requests/__init__.py:11
+     3: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.0.1)/chars
+     et_normalizer (3.4.5) doesn't match a supported version!
+     … +12 lines (ctrl+o to expand)
+
+● Bash(~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager --list 2>&1 | grep -i
+      "playstore" | head -10)
+  ⎿    system-images;android-24;google_apis_playstore;x86
+                 | 19                | Google Play Intel x86 Atom System Im
+     age
+     … +22 lines (ctrl+o to expand)
+
+● Bash(~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager --list 2>&1 | grep -i
+      "playstore" | grep "android-3[0-9]" | head -10)
+  ⎿    system-images;android-30;google_apis_playstore;arm64-v8a
+                 | 10                | Google Play ARM 64 v8a System Image
+     … +22 lines (ctrl+o to expand)
+
+● Bash(~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager --list 2>&1 | grep -i
+      "playstore" | grep "android-3[4-9]" | head -10)
+  ⎿    system-images;android-34-ext10;google_apis_playstore;arm64-v8a
+                 | 2                 | Google Play ARM 64 v8a System Image
+     … +22 lines (ctrl+o to expand)
+
+● Bash(~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager --list 2>&1 | grep
+      "system-images;android-34;google_apis_playstore")
+  ⎿    system-images;android-34;google_apis_playstore;arm64-v8a
+                 | 14                | Google Play ARM 64 v8a System Image
+     … +3 lines (ctrl+o to expand)
+
+● Good — system-images;android-34;google_apis_playstore;x86_64 exists. The
+  problem is _find_sdk_tool picks /usr/bin/sdkmanager first (it's on PATH) which
+   is the F-Droid one that can't install Android system images. I need to prefer
+   the SDK's own sdkmanager over the system one. Let me fix the lookup order and
+   also detect the architecture automatically:
+
+● Bash(uname -m)
+  ⎿  x86_64
+
+● Now I'll rewrite _find_sdk_tool to check the SDK directories first (preferring
+   the real Android SDK tools over any system package), and update
+  download_gplay_emulator to pick the right architecture:
+
+  Read 1 file (ctrl+o to expand)
+
+● Now I'll rewrite the whole adb_manager.py with the fixes: SDK-first tool
+  lookup, architecture detection, and proper ANDROID_HOME env passed to
+  subprocess:
+
+  Read 1 file (ctrl+o to expand)
+
+● Now I have the full picture. The key issues:
+
+  1. _find_sdk_tool checks PATH first — picks up /usr/bin/sdkmanager (F-Droid
+  wrapper, wrong one) before the real Android SDK one
+  2. GPLAY_SYSTEM_IMAGE is hardcoded to x86_64 — need to pick arch at runtime
+  3. The avdmanager subprocess needs ANDROID_SDK_ROOT in its env or it can't
+  find the system image
+  4. License acceptance: sdkmanager --licenses should be accepted first
+
+● Write(core/adb_manager.py)
+  ⎿  Added 161 lines, removed 79 lines
+       2  ADB device detection and Android emulator management.
+       3  All calls use subprocess — same pattern as docker_runner.py.
+       4  """
+       5 +import os                                                      
+       6 +import platform                                                
+       7 +import shutil                                                  
+       8  import subprocess
+       9  import threading
+      10  from typing import Callable
+      11  
+      12  
+      13 +# -------------------------------------------------------------
+         +----- #                                                        
+      14 +#  SDK tool discovery                                          
+         +        #                                                      
+      15 +# -------------------------------------------------------------
+         +----- #                                                        
+      16 +                                                               
+      17 +def _sdk_roots() -> list[str]:                                 
+      18 +    """Returns candidate Android SDK root directories, most-pre
+         +ferred first."""                                               
+      19 +    home = os.path.expanduser("~")                             
+      20 +    roots = []                                                 
+      21 +    # Explicit env vars take top priority                      
+      22 +    for var in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):           
+      23 +        val = os.environ.get(var, "").strip()                  
+      24 +        if val:                                                
+      25 +            roots.append(val)                                  
+      26 +    # Common install locations                                 
+      27 +    roots += [                                                 
+      28 +        os.path.join(home, "Android", "Sdk"),   # Android Studi
+         +o default (Linux/Win)                                          
+      29 +        os.path.join(home, "Library", "Android", "sdk"),  # mac
+         +OS                                                             
+      30 +        os.path.join(home, "android-sdk"),                     
+      31 +        "/opt/android-sdk",                                    
+      32 +        "/usr/local/android-sdk",                              
+      33 +    ]                                                          
+      34 +    return [r for r in roots if r]                             
+      35 +                                                               
+      36 +                                                               
+      37 +def _find_sdk_tool(name: str) -> str | None:                   
+      38 +    """                                                        
+      39 +    Returns the full path to an Android SDK cmdline-tools binar
+         +y.                                                             
+      40 +    Searches the real Android SDK directories FIRST so we never
+         + pick up                                                       
+      41 +    a system package (e.g. the F-Droid sdkmanager on Ubuntu) by
+         + accident.                                                     
+      42 +    Falls back to PATH only when no SDK copy is found.         
+      43 +    """                                                        
+      44 +    for sdk_root in _sdk_roots():                              
+      45 +        # cmdline-tools/<version>/bin/<name>  — try newest vers
+         +ion first                                                      
+      46 +        cmdline_tools = os.path.join(sdk_root, "cmdline-tools")
+      47 +        if os.path.isdir(cmdline_tools):                       
+      48 +            for entry in sorted(os.listdir(cmdline_tools), reve
+         +rse=True):                                                     
+      49 +                candidate = os.path.join(cmdline_tools, entry, 
+         +"bin", name)                                                   
+      50 +                if os.path.isfile(candidate) and os.access(cand
+         +idate, os.X_OK):                                               
+      51 +                    return candidate                           
+      52 +        # Legacy tools/bin layout                              
+      53 +        legacy = os.path.join(sdk_root, "tools", "bin", name)  
+      54 +        if os.path.isfile(legacy) and os.access(legacy, os.X_OK
+         +):                                                             
+      55 +            return legacy                                      
+      56 +                                                               
+      57 +    # Final fallback: anything on PATH                         
+      58 +    return shutil.which(name)                                  
+      59 +                                                               
+      60 +                                                               
+      61 +def _sdk_env() -> dict:                                        
+      62 +    """                                                        
+      63 +    Returns an env dict with ANDROID_HOME / ANDROID_SDK_ROOT se
+         +t to the                                                       
+      64 +    first valid SDK root we can find.  Needed so avdmanager/sdk
+         +manager can                                                    
+      65 +    locate the SDK even when the env vars aren't exported by th
+         +e shell.                                                       
+      66 +    """                                                        
+      67 +    env = os.environ.copy()                                    
+      68 +    for root in _sdk_roots():                                  
+      69 +        if os.path.isdir(root):                                
+      70 +            env["ANDROID_HOME"] = root                         
+      71 +            env["ANDROID_SDK_ROOT"] = root                     
+      72 +            return env                                         
+      73 +    return env                                                 
+      74 +                                                               
+      75 +                                                               
+      76 +def _host_arch() -> str:                                       
+      77 +    """Maps platform.machine() to the Android system-image ABI 
+         +suffix."""                                                     
+      78 +    machine = platform.machine().lower()                       
+      79 +    if machine in ("arm64", "aarch64"):                        
+      80 +        return "arm64-v8a"                                     
+      81 +    return "x86_64"                                            
+      82 +                                                               
+      83 +                                                               
+      84 +def is_sdkmanager_available() -> bool:                         
+      85 +    return _find_sdk_tool("sdkmanager") is not None            
+      86 +                                                               
+      87 +                                                               
+      88 +# -------------------------------------------------------------
+         +----- #                                                        
+      89 +#  ADB                                                         
+         +        #                                                      
+      90 +# -------------------------------------------------------------
+         +----- #                                                        
+      91 +                                                               
+      92  def is_adb_available() -> bool:
+      93      try:
+      94          subprocess.run(["adb", "version"], capture_output=True,
+           timeout=5)
+     ...
+      126      return devices
+      127  
+      128  
+      129 +# ------------------------------------------------------------
+          +------ #                                                      
+      130 +#  AVD management                                             
+          +         #                                                    
+      131 +# ------------------------------------------------------------
+          +------ #                                                      
+      132 +                                                              
+      133  def list_avds() -> list[str]:
+      134      """Returns list of AVD names from avdmanager."""
+      135      avdmanager = _find_sdk_tool("avdmanager")
+     ...
+      138      try:
+      139          result = subprocess.run(
+      140              [avdmanager, "list", "avd", "-c"],
+       55 -            capture_output=True, text=True, timeout=15        
+      141 +            capture_output=True, text=True, timeout=15,       
+      142 +            env=_sdk_env(),                                   
+      143          )
+      144          return [line.strip() for line in result.stdout.splitli
+           nes() if line.strip()]
+      145      except (FileNotFoundError, subprocess.TimeoutExpired):
+     ...
+      154      Launches an AVD emulator as a background process.
+      155      Returns the Popen handle so the caller can terminate it.
+      156      """
+      157 +    emulator = _find_sdk_tool("emulator") or "emulator"       
+      158      try:
+      159          proc = subprocess.Popen(
+       72 -            ["emulator", "-avd", avd_name, "-no-snapshot-save"
+          -],                                                            
+      160 +            [emulator, "-avd", avd_name, "-no-snapshot-save"],
+      161              stdout=subprocess.PIPE,
+      162              stderr=subprocess.STDOUT,
+      163              text=True,
+      164 +            env=_sdk_env(),                                   
+      165          )
+      166  
+      167          def _read_output():
+     ...
+      173          return proc
+      174      except FileNotFoundError:
+      175          if on_output:
+       87 -            on_output("ERROR: 'emulator' not found. Install An
+          -droid SDK emulator package.")                                 
+      176 +            on_output("ERROR: emulator binary not found. Insta
+          +ll Android SDK emulator package.")                            
+      177          return None
+      178  
+      179  
+     ...
+      189          return False
+      190  
+      191  
+      103 -def _find_sdk_tool(name: str) -> str | None:                  
+      192 +def wait_for_boot(serial: str, timeout: int = 120) -> bool:   
+      193      """
+      105 -    Returns the full path to an Android SDK tool, checking com
+          -mon install                                                   
+      106 -    locations in addition to whatever is already on PATH.     
+      194 +    Polls adb until the emulator reports sys.boot_completed=1.
+      195 +    Returns True if booted within timeout, False otherwise.   
+      196      """
+      108 -    import shutil                                             
+      109 -    import os                                                 
+      197 +    import time                                               
+      198 +    deadline = time.time() + timeout                          
+      199 +    while time.time() < deadline:                             
+      200 +        try:                                                  
+      201 +            result = subprocess.run(                          
+      202 +                ["adb", "-s", serial, "shell", "getprop", "sys
+          +.boot_completed"],                                            
+      203 +                capture_output=True, text=True, timeout=5     
+      204 +            )                                                 
+      205 +            if result.stdout.strip() == "1":                  
+      206 +                return True                                   
+      207 +        except (FileNotFoundError, subprocess.TimeoutExpired):
+      208 +            pass                                              
+      209 +        time.sleep(3)                                         
+      210 +    return False                                              
+      211  
+      111 -    # Check PATH first                                        
+      112 -    found = shutil.which(name)                                
+      113 -    if found:                                                 
+      114 -        return found                                          
+      212  
+      116 -    # Common SDK root locations                               
+      117 -    home = os.path.expanduser("~")                            
+      118 -    candidates = [                                            
+      119 -        os.path.join(home, "Android", "Sdk"),                 
+      120 -        os.path.join(home, "android-sdk"),                    
+      121 -        "/opt/android-sdk",                                   
+      122 -        "/usr/local/android-sdk",                             
+      123 -        os.environ.get("ANDROID_HOME", ""),                   
+      124 -        os.environ.get("ANDROID_SDK_ROOT", ""),               
+      125 -    ]                                                         
+      213 +# ------------------------------------------------------------
+          +------ #                                                      
+      214 +#  Google Play emulator download                              
+          +         #                                                    
+      215 +# ------------------------------------------------------------
+          +------ #                                                      
+      216  
+      127 -    # sdkmanager lives in cmdline-tools/<version>/bin/ or tool
+          -s/bin/                                                        
+      128 -    for sdk_root in filter(None, candidates):                 
+      129 -        cmdline_tools = os.path.join(sdk_root, "cmdline-tools"
+          -)                                                             
+      130 -        if os.path.isdir(cmdline_tools):                      
+      131 -            for entry in sorted(os.listdir(cmdline_tools), rev
+          -erse=True):                                                   
+      132 -                candidate = os.path.join(cmdline_tools, entry,
+          - "bin", name)                                                 
+      133 -                if os.path.isfile(candidate) and os.access(can
+          -didate, os.X_OK):                                             
+      134 -                    return candidate                          
+      135 -        # Legacy tools/bin                                    
+      136 -        legacy = os.path.join(sdk_root, "tools", "bin", name) 
+      137 -        if os.path.isfile(legacy) and os.access(legacy, os.X_O
+          -K):                                                           
+      138 -            return legacy                                     
+      217 +GPLAY_AVD_NAME = "MADPro_GPlay"                               
+      218  
+      140 -    return None                                               
+      219  
+      220 +def _gplay_system_image() -> str:                             
+      221 +    return f"system-images;android-34;google_apis_playstore;{_
+          +host_arch()}"                                                 
+      222  
+      143 -def is_sdkmanager_available() -> bool:                        
+      144 -    return _find_sdk_tool("sdkmanager") is not None           
+      223  
+      146 -                                                              
+      147 -GPLAY_AVD_NAME = "MADPro_GPlay"                               
+      148 -GPLAY_SYSTEM_IMAGE = "system-images;android-34;google_apis_pla
+          -ystore;x86_64"                                                
+      149 -                                                              
+      150 -                                                              
+      224  def download_gplay_emulator(
+      225      on_output: Callable[[str], None] | None = None,
+      226      stop_event: threading.Event | None = None,
+      227  ) -> bool:
+      228      """
+      229      Downloads the Google Play system image via sdkmanager and 
+           creates an AVD.
+      230 +    Uses the Android SDK bundled sdkmanager (not the system F-
+          +Droid one).                                                   
+      231      Returns True on success.
+      232      """
+      233      def log(msg: str):
+     ...
+      236  
+      237      sdkmanager = _find_sdk_tool("sdkmanager")
+      238      if not sdkmanager:
+      165 -        log("ERROR: 'sdkmanager' not found.")                 
+      166 -        log("Install Android SDK command-line tools from:")   
+      239 +        log("ERROR: Android SDK sdkmanager not found.")       
+      240 +        log("Install Android SDK command-line tools:")        
+      241          log("  https://developer.android.com/studio#command-to
+           ols")
+      168 -        log("Then ensure ANDROID_HOME or ANDROID_SDK_ROOT is s
+          -et, or add")                                                  
+      169 -        log("  $ANDROID_HOME/cmdline-tools/latest/bin  to your
+          - PATH.")                                                      
+      242 +        log("Extract to ~/Android/Sdk/cmdline-tools/latest/ an
+          +d re-try.")                                                   
+      243          return False
+      244  
+      245      avdmanager = _find_sdk_tool("avdmanager")
+      246      if not avdmanager:
+      174 -        log("ERROR: 'avdmanager' not found in SDK. Re-install 
+          -cmdline-tools.")                                              
+      247 +        log("ERROR: avdmanager not found. Re-install Android S
+          +DK cmdline-tools.")                                           
+      248          return False
+      249  
+      177 -    log(f"Downloading system image: {GPLAY_SYSTEM_IMAGE}")    
+      178 -    log("This may take several minutes depending on your conne
+          -ction speed...")                                              
+      250 +    system_image = _gplay_system_image()                      
+      251 +    env = _sdk_env()                                          
+      252  
+      253 +    log(f"Using sdkmanager: {sdkmanager}")                    
+      254 +    log(f"System image: {system_image}")                      
+      255 +                                                              
+      256 +    # Step 1: accept licenses                                 
+      257 +    log("Accepting SDK licenses...")                          
+      258      try:
+      259 +        lic_proc = subprocess.Popen(                          
+      260 +            [sdkmanager, "--licenses"],                       
+      261 +            stdin=subprocess.PIPE,                            
+      262 +            stdout=subprocess.PIPE,                           
+      263 +            stderr=subprocess.STDOUT,                         
+      264 +            text=True,                                        
+      265 +            env=env,                                          
+      266 +        )                                                     
+      267 +        # Send 'y' many times to accept all license prompts   
+      268 +        try:                                                  
+      269 +            lic_proc.stdin.write("y\n" * 20)                  
+      270 +            lic_proc.stdin.flush()                            
+      271 +            lic_proc.stdin.close()                            
+      272 +        except (BrokenPipeError, OSError):                    
+      273 +            pass                                              
+      274 +        lic_proc.wait(timeout=30)                             
+      275 +    except Exception as e:                                    
+      276 +        log(f"WARNING: license step failed ({e}), continuing a
+          +nyway...")                                                    
+      277 +                                                              
+      278 +    # Step 2: install system image                            
+      279 +    log(f"Downloading system image (this may take several minu
+          +tes)...")                                                     
+      280 +    try:                                                      
+      281          proc = subprocess.Popen(
+      182 -            [sdkmanager, "--install", GPLAY_SYSTEM_IMAGE],    
+      282 +            [sdkmanager, "--install", system_image],          
+      283              stdin=subprocess.PIPE,
+      284              stdout=subprocess.PIPE,
+      285              stderr=subprocess.STDOUT,
+      286              text=True,
+      287 +            env=env,                                          
+      288          )
+      188 -        # Accept the license automatically by sending 'y'     
+      289          try:
+      190 -            proc.stdin.write("y\n")                           
+      290 +            proc.stdin.write("y\n" * 10)                      
+      291              proc.stdin.flush()
+      292              proc.stdin.close()
+      293          except (BrokenPipeError, OSError):
+     ...
+      307              log(f"ERROR: sdkmanager exited with code {proc.ret
+           urncode}")
+      308              return False
+      309      except FileNotFoundError:
+      210 -        log("ERROR: 'sdkmanager' not found.")                 
+      310 +        log("ERROR: sdkmanager not executable.")              
+      311          return False
+      312  
+      213 -    log(f"Creating AVD: {GPLAY_AVD_NAME}")                    
+      313 +    # Step 3: create AVD                                      
+      314 +    log(f"Creating AVD '{GPLAY_AVD_NAME}'...")                
+      315      try:
+      316          result = subprocess.run(
+      317              [
+      318                  avdmanager, "create", "avd",
+      319                  "-n", GPLAY_AVD_NAME,
+      219 -                "-k", GPLAY_SYSTEM_IMAGE,                     
+      320 +                "-k", system_image,                           
+      321                  "--force",
+      322              ],
+      222 -            input="no\n",  # don't create custom hardware prof
+          -ile                                                           
+      323 +            input="no\n",  # decline custom hardware profile p
+          +rompt                                                         
+      324              capture_output=True,
+      325              text=True,
+      326              timeout=60,
+      327 +            env=env,                                          
+      328          )
+      329          if result.returncode != 0:
+      228 -            log(f"ERROR: avdmanager failed: {result.stderr.str
+          -ip()}")                                                       
+      330 +            err = (result.stderr or result.stdout).strip()    
+      331 +            log(f"ERROR: avdmanager failed: {err}")           
+      332              return False
+      333      except (FileNotFoundError, subprocess.TimeoutExpired) as e
+           :
+      334          log(f"ERROR: avdmanager failed: {e}")
+      335          return False
+      336  
+      234 -    log(f"AVD '{GPLAY_AVD_NAME}' created successfully with Goo
+          -gle Play support.")                                           
+      337 +    log(f"AVD '{GPLAY_AVD_NAME}' created successfully with Goo
+          +gle Play Store.")                                             
+      338      return True
+      236 -                                                              
+      237 -                                                              
+      238 -def wait_for_boot(serial: str, timeout: int = 120) -> bool:   
+      239 -    """                                                       
+      240 -    Polls adb until the emulator reports sys.boot_completed=1.
+      241 -    Returns True if booted within timeout, False otherwise.   
+      242 -    """                                                       
+      243 -    import time                                               
+      244 -    deadline = time.time() + timeout                          
+      245 -    while time.time() < deadline:                             
+      246 -        try:                                                  
+      247 -            result = subprocess.run(                          
+      248 -                ["adb", "-s", serial, "shell", "getprop", "sys
+          -.boot_completed"],                                            
+      249 -                capture_output=True, text=True, timeout=5     
+      250 -            )                                                 
+      251 -            if result.stdout.strip() == "1":                  
+      252 -                return True                                   
+      253 -        except (FileNotFoundError, subprocess.TimeoutExpired):
+      254 -            pass                                              
+      255 -        time.sleep(3)                                         
+      256 -    return False                                              
+
+● Now update device_panel.py to use the dynamic _gplay_system_image() name in
+  the download section label, and also update the _update_avds import to use the
+   new constant:
+
+  Read 1 file (ctrl+o to expand)
+
+● The panel text is fine. Now let me verify the _update_avds section still has
+  the right import:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Good. Let me do a quick sanity check to verify the new _find_sdk_tool logic
+  would find the right sdkmanager on this system:
+
+● Bash(python3 -c "
+      from core.adb_manager import _find_sdk_tool, _sdk_env,
+      _gplay_system_image, _sdk_roots…)
+  ⎿  SDK roots: ['/home/sean/Android/Sdk', '/home/sean/Android/Sdk', '/home
+     /sean/Android/Sdk']
+     sdkmanager: /home/sean/Android/Sdk/cmdline-tools/latest/bin/sdkmanager
+     … +4 lines (ctrl+o to expand)
+
+● All tools resolve correctly now. The fix:
+
+  - _find_sdk_tool now searches SDK directories first (ANDROID_HOME →
+  ~/Android/Sdk → etc.), so it finds
+  ~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager instead of the system
+  F-Droid sdkmanager at /usr/bin/sdkmanager
+  - _sdk_env() injects ANDROID_HOME/ANDROID_SDK_ROOT into every subprocess env
+  so avdmanager can locate the SDK even when not exported in the shell
+  - _gplay_system_image() picks x86_64 or arm64-v8a based on host architecture
+  at runtime
+  - start_emulator also now uses _find_sdk_tool("emulator") so it finds
+  ~/Android/Sdk/emulator/emulator via the same logic
+  - License acceptance runs as a separate sdkmanager --licenses step before the
+  download
+
+✻ Worked for 1m 56s
+❯ We want the ability to download a emulator from a dropdown list that shows    
+available emulators that contains the google play store. This can be added the  
+list of emulators to start once it downloads. [Image #15]                       
+  ⎿  [Image #15]
+
+● The user wants a dropdown of available Google Play system images to download,
+  then add the created AVD to the existing AVD list. Let me first check what
+  images are available:
+
+● Bash(~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager --list 2>/dev/null |
+      grep "system-images.*google_apis_playstore" | grep -v "^\-\-" | awk
+      '{print $1}' | sort -…)
+  ⎿  system-images;android-36.0-Baklava;google_apis_playstore;arm64-v8a
+     system-images;android-36.0-Baklava;google_apis_playstore;x86_64
+     system-images;android-36.0-Baklava;google_apis_playstore_ps16k;arm64-v
+     … +16 lines (ctrl+o to expand)
+
+● Good. The plan:
+  1. Add list_gplay_system_images() to adb_manager.py — queries sdkmanager and
+  returns available Google Play images filtered to host arch, sorted
+  newest-first with a human-friendly label
+  2. Update download_gplay_emulator() to accept a specific system_image
+  parameter
+  3. Rework the _gplay_frame in device_panel.py to show a "Fetch available
+  images" button → populates a dropdown → Download button installs and creates
+  AVD named after the API level
+
+  Read 1 file (ctrl+o to expand)
+
+● Now I'll add list_gplay_system_images() and update download_gplay_emulator()
+  to accept a specific image:
+
+● Update(core/adb_manager.py)
+  ⎿  Added 63 lines, removed 3 lines
+      214  #  Google Play emulator download                              
+                    #
+      215  # ------------------------------------------------------------
+           ------ #
+      216  
+      217 -GPLAY_AVD_NAME = "MADPro_GPlay"                               
+      217 +def list_gplay_system_images() -> list[dict]:                 
+      218 +    """                                                       
+      219 +    Queries sdkmanager for available (not yet installed) Googl
+          +e Play system                                                 
+      220 +    images matching the host architecture.  Returns a list of 
+          +dicts:                                                        
+      221 +      { "package": "system-images;android-34;google_apis_plays
+          +tore;x86_64",                                                 
+      222 +        "label":   "Android 34 — Google Play (x86_64)" }      
+      223 +    Sorted newest API level first.                            
+      224 +    """                                                       
+      225 +    sdkmanager = _find_sdk_tool("sdkmanager")                 
+      226 +    if not sdkmanager:                                        
+      227 +        return []                                             
+      228  
+      229 +    arch = _host_arch()                                       
+      230 +    try:                                                      
+      231 +        result = subprocess.run(                              
+      232 +            [sdkmanager, "--list"],                           
+      233 +            capture_output=True, text=True, timeout=60,       
+      234 +            env=_sdk_env(),                                   
+      235 +        )                                                     
+      236 +    except (FileNotFoundError, subprocess.TimeoutExpired):    
+      237 +        return []                                             
+      238  
+      220 -def _gplay_system_image() -> str:                             
+      221 -    return f"system-images;android-34;google_apis_playstore;{_
+          -host_arch()}"                                                 
+      239 +    images = []                                               
+      240 +    seen: set[str] = set()                                    
+      241 +    for line in result.stdout.splitlines():                   
+      242 +        line = line.strip()                                   
+      243 +        if not line.startswith("system-images;"):             
+      244 +            continue                                          
+      245 +        pkg = line.split()[0]                                 
+      246 +        parts = pkg.split(";")                                
+      247 +        if len(parts) != 4:                                   
+      248 +            continue                                          
+      249 +        _, api, tag, image_arch = parts                       
+      250 +        if image_arch != arch:                                
+      251 +            continue                                          
+      252 +        if "playstore" not in tag or "automotive" in tag:     
+      253 +            continue                                          
+      254 +        if pkg in seen:                                       
+      255 +            continue                                          
+      256 +        seen.add(pkg)                                         
+      257  
+      258 +        # Human-readable label                                
+      259 +        api_label = api.replace("android-", "API ")           
+      260 +        tag_label = "Google Play"                             
+      261 +        label = f"{api_label} — {tag_label} ({image_arch})"   
+      262 +        images.append({"package": pkg, "label": label})       
+      263  
+      264 +    # Sort: numeric API levels descending, non-numeric (CANARY
+          + etc.) last                                                   
+      265 +    def _sort_key(item):                                      
+      266 +        api_str = item["package"].split(";")[1].replace("andro
+          +id-", "")                                                     
+      267 +        try:                                                  
+      268 +            return (0, -int(api_str))                         
+      269 +        except ValueError:                                    
+      270 +            return (1, api_str)                               
+      271 +                                                              
+      272 +    images.sort(key=_sort_key)                                
+      273 +    return images                                             
+      274 +                                                              
+      275 +                                                              
+      276 +def _avd_name_for_image(system_image: str) -> str:            
+      277 +    """Derives a stable AVD name from a system image package s
+          +tring."""                                                     
+      278 +    parts = system_image.split(";")                           
+      279 +    api = parts[1].replace("android-", "api") if len(parts) > 
+          +1 else "unknown"                                              
+      280 +    return f"MADPro_GPlay_{api}"                              
+      281 +                                                              
+      282 +                                                              
+      283  def download_gplay_emulator(
+      284 +    system_image: str,                                        
+      285      on_output: Callable[[str], None] | None = None,
+      286      stop_event: threading.Event | None = None,
+      287  ) -> bool:
+
+● Now update the body of download_gplay_emulator to use the passed-in
+  system_image and the derived AVD name:
+
+● Update(core/adb_manager.py)
+  ⎿  Added 1 line, removed 1 line
+      307          log("ERROR: avdmanager not found. Re-install Android S
+           DK cmdline-tools.")
+      308          return False
+      309  
+      310 -    system_image = _gplay_system_image()                      
+      310 +    avd_name = _avd_name_for_image(system_image)              
+      311      env = _sdk_env()
+      312  
+      313      log(f"Using sdkmanager: {sdkmanager}")
+
+● Update(core/adb_manager.py)
+  ⎿  Added 3 lines, removed 3 lines
+      371          return False
+      372  
+      373      # Step 3: create AVD
+      374 -    log(f"Creating AVD '{GPLAY_AVD_NAME}'...")                
+      374 +    log(f"Creating AVD '{avd_name}'...")                      
+      375      try:
+      376          result = subprocess.run(
+      377              [
+      378                  avdmanager, "create", "avd",
+      379 -                "-n", GPLAY_AVD_NAME,                         
+      379 +                "-n", avd_name,                               
+      380                  "-k", system_image,
+      381                  "--force",
+      382              ],
+     ...
+      394          log(f"ERROR: avdmanager failed: {e}")
+      395          return False
+      396  
+      397 -    log(f"AVD '{GPLAY_AVD_NAME}' created successfully with Goo
+          -gle Play Store.")                                             
+      397 +    log(f"AVD '{avd_name}' created successfully with Google Pl
+          +ay Store.")                                                   
+      398      return True
+
+● Now remove the now-unused GPLAY_AVD_NAME constant (it's no longer a single
+  fixed name) and update device_panel.py accordingly:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Good, it's already gone. Now rewrite the _gplay_frame section in
+  device_panel.py — replace the static prompt with a proper UI: fetch button →
+  dropdown of images → download button:
+
+  Read 1 file (ctrl+o to expand)
+
+● Now I'll rewrite device_panel.py with the new download UI — a dropdown of
+  available images + a download button, always visible below the AVD section
+  (not just when no AVDs exist):
+
+● Write(gui/widgets/device_panel.py)
+  ⎿  Added 157 lines, removed 66 lines
+      20          self._emulator_proc: subprocess.Popen | None = None
+      21          self._selected_serial: str | None = None
+      22          self._polling = True
+      23 +        # list of {"package": ..., "label": ...} from sdkmanage
+         +r                                                              
+      24 +        self._gplay_images: list[dict] = []                    
+      25 +        self._dl_stop_event: threading.Event | None = None     
+      26  
+      27          self._build_ui()
+      28          self._refresh_devices()
+     ...
+      53                        hover_color=styles.ACCENT,
+      54                        command=self._refresh_devices).pack(side=
+          "right")
+      55  
+      53 -        # Device selector (shown when multiple devices)        
+      56 +        # Device selector                                      
+      57          self._device_var = tk.StringVar()
+      58          self._device_menu = ctk.CTkOptionMenu(
+      59              self, variable=self._device_var,
+     ...
+      70          ctk.CTkFrame(self, fg_color=styles.BG_CARD, height=1).p
+          ack(
+      71              fill="x", padx=styles.PAD, pady=(0, styles.PAD_SMAL
+          L))
+      72  
+      70 -        # Emulator section                                     
+      73 +        # ── Emulator (AVD) section ───────────────────────────
+         +───────────                                                    
+      74          ctk.CTkLabel(self, text="Emulator (AVD)", font=styles.F
+          ONT_SMALL,
+      75                       text_color=styles.TEXT_SECONDARY).pack(
+      76              anchor="w", padx=styles.PAD, pady=(0, 2))
+     ...
+      111          self._emu_status.pack(anchor="w", padx=styles.PAD,
+      112                                 pady=(0, styles.PAD_SMALL))
+      113  
+      111 -        # Download Google Play emulator section (hidden by def
+          -ault)                                                         
+      112 -        self._gplay_frame = ctk.CTkFrame(self, fg_color=styles
+          -.BG_CARD,                                                     
+      113 -                                          corner_radius=styles
+          -.CORNER_RADIUS)                                               
+      114 +        # Divider                                             
+      115 +        ctk.CTkFrame(self, fg_color=styles.BG_CARD, height=1).
+          +pack(                                                         
+      116 +            fill="x", padx=styles.PAD, pady=(0, styles.PAD_SMA
+          +LL))                                                          
+      117  
+      115 -        ctk.CTkLabel(                                         
+      116 -            self._gplay_frame,                                
+      117 -            text="No AVDs found. Download a Google Play emulat
+          -or?",                                                         
+      118 +        # ── Download Google Play emulator ───────────────────
+          +────────────                                                  
+      119 +        ctk.CTkLabel(self, text="Download Google Play Emulator
+          +",                                                            
+      120 +                     font=styles.FONT_SMALL,                  
+      121 +                     text_color=styles.TEXT_SECONDARY).pack(  
+      122 +            anchor="w", padx=styles.PAD, pady=(0, 4))         
+      123 +                                                              
+      124 +        # Image picker row: dropdown + Fetch button           
+      125 +        img_row = ctk.CTkFrame(self, fg_color="transparent")  
+      126 +        img_row.pack(fill="x", padx=styles.PAD, pady=(0, style
+          +s.PAD_SMALL))                                                 
+      127 +                                                              
+      128 +        self._img_var = tk.StringVar(value="Click Fetch to loa
+          +d images")                                                    
+      129 +        self._img_menu = ctk.CTkOptionMenu(                   
+      130 +            img_row, variable=self._img_var,                  
+      131 +            values=["Click Fetch to load images"],            
+      132              font=styles.FONT_SMALL,
+      119 -            text_color=styles.TEXT_SECONDARY,                 
+      120 -            wraplength=280,                                   
+      121 -        ).pack(anchor="w", padx=styles.PAD_SMALL, pady=(styles
+          -.PAD_SMALL, 4))                                               
+      133 +            fg_color=styles.BG_CARD,                          
+      134 +            button_color=styles.BG_CARD,                      
+      135 +            button_hover_color=styles.ACCENT,                 
+      136 +            dynamic_resizing=False,                           
+      137 +        )                                                     
+      138 +        self._img_menu.pack(side="left", fill="x", expand=True
+          +,                                                             
+      139 +                             padx=(0, styles.PAD_SMALL))      
+      140  
+      141 +        self._fetch_btn = ctk.CTkButton(                      
+      142 +            img_row, text="Fetch", width=60, font=styles.FONT_
+          +SMALL,                                                        
+      143 +            fg_color=styles.BG_CARD, hover_color=styles.ACCENT
+          +,                                                             
+      144 +            command=self._fetch_images,                       
+      145 +        )                                                     
+      146 +        self._fetch_btn.pack(side="left")                     
+      147 +                                                              
+      148 +        # Download button + cancel                            
+      149 +        dl_btn_row = ctk.CTkFrame(self, fg_color="transparent"
+          +)                                                             
+      150 +        dl_btn_row.pack(fill="x", padx=styles.PAD, pady=(0, st
+          +yles.PAD_SMALL))                                              
+      151 +                                                              
+      152          self._dl_btn = ctk.CTkButton(
+      124 -            self._gplay_frame,                                
+      125 -            text="Download Google Play Emulator",             
+      126 -            font=styles.FONT_SMALL,                           
+      127 -            fg_color=styles.ACCENT,                           
+      128 -            hover_color=styles.ACCENT_HOVER,                  
+      153 +            dl_btn_row, text="Download & Install", font=styles
+          +.FONT_SMALL,                                                  
+      154 +            fg_color=styles.ACCENT, hover_color=styles.ACCENT_
+          +HOVER,                                                        
+      155              command=self._start_gplay_download,
+      156          )
+      131 -        self._dl_btn.pack(fill="x", padx=styles.PAD_SMALL,    
+      132 -                           pady=(0, styles.PAD_SMALL))        
+      157 +        self._dl_btn.pack(side="left", padx=(0, styles.PAD_SMA
+          +LL))                                                          
+      158  
+      134 -        self._dl_log = ctk.CTkLabel(                          
+      135 -            self._gplay_frame, text="",                       
+      136 -            font=styles.FONT_SMALL, text_color=styles.TEXT_SEC
+          -ONDARY,                                                       
+      137 -            wraplength=280, justify="left", anchor="w",       
+      159 +        self._dl_cancel_btn = ctk.CTkButton(                  
+      160 +            dl_btn_row, text="Cancel", width=65, font=styles.F
+          +ONT_SMALL,                                                    
+      161 +            fg_color="#7f1d1d", hover_color="#991b1b",        
+      162 +            command=self._cancel_download, state="disabled",  
+      163          )
+      139 -        self._dl_log.pack(fill="x", padx=styles.PAD_SMALL,    
+      140 -                           pady=(0, styles.PAD_SMALL))        
+      164 +        self._dl_cancel_btn.pack(side="left")                 
+      165  
+      142 -        self._dl_stop_event: threading.Event | None = None    
+      166 +        # Progress bar (hidden until download starts)         
+      167 +        self._dl_progress = ctk.CTkProgressBar(               
+      168 +            self, mode="indeterminate",                       
+      169 +            fg_color=styles.BG_PRIMARY, progress_color=styles.
+          +ACCENT)                                                       
+      170  
+      144 -        # Spacing at bottom                                   
+      145 -        ctk.CTkFrame(self, fg_color="transparent", height=styl
+          -es.PAD_SMALL).pack()                                          
+      171 +        # Status line                                         
+      172 +        self._dl_status = ctk.CTkLabel(                       
+      173 +            self, text="", font=styles.FONT_SMALL,            
+      174 +            text_color=styles.TEXT_MUTED, anchor="w", wrapleng
+          +th=320)                                                       
+      175 +        self._dl_status.pack(fill="x", padx=styles.PAD, pady=(
+          +0, styles.PAD))                                               
+      176  
+      177          # Load AVDs in background
+      178          threading.Thread(target=self._load_avds, daemon=True).
+           start()
+     ...
+      194  
+      195      def _show_no_adb(self):
+      196          self._status_dot.configure(text_color=styles.ERROR)
+      167 -        self._status_label.configure(text="adb not found — ins
+          -tall Android SDK platform-tools")                             
+      197 +        self._status_label.configure(                         
+      198 +            text="adb not found — install Android SDK platform
+          +-tools")                                                      
+      199          self._device_menu.configure(values=["adb not available
+           "])
+      200  
+      201      def _update_devices(self, devices: list[dict]):
+      202          self._devices = devices
+      203          if not devices:
+      204              self._status_dot.configure(text_color=styles.TEXT_
+           MUTED)
+      174 -            self._status_label.configure(text="No devices conn
+          -ected")                                                       
+      205 +            self._status_label.configure(text="No devices conn
+          +ected",                                                       
+      206 +                                          text_color=styles.TE
+          +XT_SECONDARY)                                                 
+      207              self._device_menu.configure(values=["No devices fo
+           und"])
+      208              self._device_var.set("No devices found")
+      209              self._selected_serial = None
+     ...
+      211                  self._on_device_changed(None)
+      212              return
+      213  
+      182 -        labels = [f"{d['model']} ({d['serial']}) [{d['type']}]
+          -" for d in devices]                                           
+      214 +        labels = [f"{d['model']} ({d['serial']}) [{d['type']}]
+          +"                                                             
+      215 +                  for d in devices]                           
+      216          self._device_menu.configure(values=labels)
+      217          self._device_var.set(labels[0])
+      218          self._selected_serial = devices[0]["serial"]
+     ...
+      249          self._avds = avds
+      250          if avds:
+      251              self._avd_menu.configure(values=avds)
+      219 -            # Auto-select MADPro_GPlay if present, else first 
+      220 -            from core.adb_manager import GPLAY_AVD_NAME       
+      221 -            preferred = GPLAY_AVD_NAME if GPLAY_AVD_NAME in av
+          -ds else avds[0]                                               
+      252 +            # Prefer any MADPro_GPlay_* AVD, else first       
+      253 +            preferred = next(                                 
+      254 +                (a for a in avds if a.startswith("MADPro_GPlay
+          +")), avds[0])                                                 
+      255              self._avd_var.set(preferred)
+      223 -            self._gplay_frame.pack_forget()                   
+      256          else:
+      257              self._avd_menu.configure(values=["No AVDs found"])
+      258              self._avd_var.set("No AVDs found")
+      227 -            self._gplay_frame.pack(fill="x", padx=styles.PAD, 
+      228 -                                    pady=(0, styles.PAD))     
+      259  
+      260      def _start_emulator(self):
+      261          avd = self._avd_var.get()
+      262          if not avd or avd == "No AVDs found":
+      263              self._emu_status.configure(
+      234 -                text="No AVD selected. Create one with Android
+          - Studio.",                                                    
+      264 +                text="No AVD selected. Download one below or c
+          +reate one in Android Studio.",                                
+      265                  text_color=styles.WARNING)
+      266              return
+      267  
+     ...
+      290              text=f"{avd} starting… waiting for boot",
+      291              text_color=styles.INFO)
+      292  
+      263 -        # Wait for boot in background                         
+      264 -        threading.Thread(                                     
+      265 -            target=self._wait_boot, daemon=True).start()      
+      293 +        threading.Thread(target=self._wait_boot, daemon=True).
+          +start()                                                       
+      294  
+      295      def _wait_boot(self):
+      296          from core.adb_manager import wait_for_boot, list_adb_d
+           evices
+      297          import time
+      270 -        # Give the emulator a moment to register with adb     
+      298          time.sleep(5)
+      299          devices = list_adb_devices()
+      300          emu = next((d for d in devices if d["type"] == "emulat
+           or"), None)
+      301          if emu:
+      302              booted = wait_for_boot(emu["serial"])
+      276 -            msg = f"Emulator ready ({emu['serial']})" if boote
+          -d else "Emulator boot timed out"                              
+      303 +            msg = (f"Emulator ready ({emu['serial']})" if boot
+          +ed                                                            
+      304 +                   else "Emulator boot timed out")            
+      305              color = styles.SUCCESS if booted else styles.WARNI
+           NG
+      306          else:
+      307              msg = "Emulator not detected by adb"
+      308              color = styles.WARNING
+      281 -        self.after(0, lambda: self._emu_status.configure(text=
+          -msg, text_color=color))                                       
+      309 +        self.after(0, lambda: self._emu_status.configure(text=
+          +msg,                                                          
+      310 +                                                          text
+          +_color=color))                                                
+      311          self.after(0, self._refresh_devices)
+      312  
+      313 +    def _stop_emulator(self):                                 
+      314 +        emu_device = next(                                    
+      315 +            (d for d in self._devices if d["type"] == "emulato
+          +r"), None)                                                    
+      316 +        if emu_device:                                        
+      317 +            from core.adb_manager import stop_emulator        
+      318 +            stop_emulator(emu_device["serial"])               
+      319 +        elif self._emulator_proc:                             
+      320 +            self._emulator_proc.terminate()                   
+      321 +                                                              
+      322 +        self._emulator_proc = None                            
+      323 +        self._stop_emu_btn.configure(state="disabled")        
+      324 +        self._start_emu_btn.configure(state="normal")         
+      325 +        self._emu_status.configure(text="Emulator stopped.",  
+      326 +                                    text_color=styles.TEXT_MUT
+          +ED)                                                           
+      327 +                                                              
+      328 +    # --------------------------------------------------------
+          +---------- #                                                  
+      329 +    #  Google Play emulator download                          
+          +             #                                                
+      330 +    # --------------------------------------------------------
+          +---------- #                                                  
+      331 +                                                              
+      332 +    def _fetch_images(self):                                  
+      333 +        self._fetch_btn.configure(state="disabled", text="Load
+          +ing...")                                                      
+      334 +        self._dl_status.configure(text="Fetching available ima
+          +ges from sdkmanager...",                                      
+      335 +                                   text_color=styles.INFO)    
+      336 +                                                              
+      337 +        def worker():                                         
+      338 +            from core.adb_manager import list_gplay_system_ima
+          +ges                                                           
+      339 +            images = list_gplay_system_images()               
+      340 +            self.after(0, lambda: self._on_images_fetched(imag
+          +es))                                                          
+      341 +                                                              
+      342 +        threading.Thread(target=worker, daemon=True).start()  
+      343 +                                                              
+      344 +    def _on_images_fetched(self, images: list[dict]):         
+      345 +        self._fetch_btn.configure(state="normal", text="Fetch"
+          +)                                                             
+      346 +        self._gplay_images = images                           
+      347 +        if not images:                                        
+      348 +            self._dl_status.configure(                        
+      349 +                text="No Google Play images found. Ensure sdkm
+          +anager is available.",                                        
+      350 +                text_color=styles.WARNING)                    
+      351 +            return                                            
+      352 +                                                              
+      353 +        labels = [img["label"] for img in images]             
+      354 +        self._img_menu.configure(values=labels)               
+      355 +        self._img_var.set(labels[0])                          
+      356 +        self._dl_status.configure(                            
+      357 +            text=f"{len(images)} image(s) available. Select on
+          +e and click Download & Install.",                             
+      358 +            text_color=styles.TEXT_SECONDARY)                 
+      359 +                                                              
+      360      def _start_gplay_download(self):
+      285 -        self._dl_btn.configure(state="disabled", text="Downloa
+          -ding...")                                                     
+      286 -        self._dl_log.configure(text="Starting download...", te
+          -xt_color=styles.INFO)                                         
+      361 +        # Find selected image package                         
+      362 +        selected_label = self._img_var.get()                  
+      363 +        img = next((i for i in self._gplay_images             
+      364 +                    if i["label"] == selected_label), None)   
+      365 +        if img is None:                                       
+      366 +            self._dl_status.configure(                        
+      367 +                text="No image selected. Click Fetch first.", 
+      368 +                text_color=styles.WARNING)                    
+      369 +            return                                            
+      370 +                                                              
+      371 +        self._dl_btn.configure(state="disabled")              
+      372 +        self._dl_cancel_btn.configure(state="normal")         
+      373 +        self._dl_progress.pack(fill="x", padx=styles.PAD,     
+      374 +                                pady=(0, styles.PAD_SMALL),   
+      375 +                                before=self._dl_status)       
+      376 +        self._dl_progress.start()                             
+      377 +        self._dl_status.configure(text=f"Downloading {selected
+          +_label}...",                                                  
+      378 +                                   text_color=styles.INFO)    
+      379 +                                                              
+      380          self._dl_stop_event = threading.Event()
+      381 +        system_image = img["package"]                         
+      382  
+      383          def worker():
+      384              from core.adb_manager import download_gplay_emulat
+           or
+      385              success = download_gplay_emulator(
+      292 -                on_output=lambda msg: self.after(0, lambda m=m
+          -sg: self._on_dl_log(m)),                                      
+      386 +                system_image=system_image,                    
+      387 +                on_output=lambda msg: self.after(             
+      388 +                    0, lambda m=msg: self._on_dl_log(m)),     
+      389                  stop_event=self._dl_stop_event,
+      390              )
+      391              self.after(0, lambda: self._on_gplay_done(success)
+           )
+     ...
+      397              display = msg.strip()
+      398              if len(display) > 70:
+      399                  display = display[:67] + "..."
+      304 -            self._dl_log.configure(text=display, text_color=st
+          -yles.TEXT_SECONDARY)                                          
+      400 +            self._dl_status.configure(text=display,           
+      401 +                                       text_color=styles.TEXT_
+          +SECONDARY)                                                    
+      402  
+      403      def _on_gplay_done(self, success: bool):
+      307 -        self._dl_btn.configure(state="normal", text="Download 
+          -Google Play Emulator")                                        
+      404 +        self._dl_progress.stop()                              
+      405 +        self._dl_progress.pack_forget()                       
+      406 +        self._dl_btn.configure(state="normal")                
+      407 +        self._dl_cancel_btn.configure(state="disabled")       
+      408          if success:
+      309 -            self._dl_log.configure(                           
+      310 -                text="Download complete. Refreshing AVD list..
+          -.",                                                           
+      409 +            self._dl_status.configure(                        
+      410 +                text="Download complete. AVD added to the list
+          + above.",                                                     
+      411                  text_color=styles.SUCCESS)
+      412              threading.Thread(target=self._load_avds, daemon=Tr
+           ue).start()
+      413          else:
+      314 -            self._dl_log.configure(                           
+      315 -                text="Download failed — see log above. Install
+          - Android SDK cmdline-tools and set ANDROID_HOME.",            
+      414 +            self._dl_status.configure(                        
+      415 +                text="Download failed. Check that Android SDK 
+          +cmdline-tools are installed.",                                
+      416                  text_color=styles.ERROR)
+      417  
+      318 -    def _stop_emulator(self):                                 
+      319 -        # Try graceful adb emu kill first                     
+      320 -        emu_device = next(                                    
+      321 -            (d for d in self._devices if d["type"] == "emulato
+          -r"), None)                                                    
+      322 -        if emu_device:                                        
+      323 -            from core.adb_manager import stop_emulator        
+      324 -            stop_emulator(emu_device["serial"])               
+      325 -        elif self._emulator_proc:                             
+      326 -            self._emulator_proc.terminate()                   
+      418 +    def _cancel_download(self):                               
+      419 +        if self._dl_stop_event:                               
+      420 +            self._dl_stop_event.set()                         
+      421 +        self._dl_cancel_btn.configure(state="disabled")       
+      422 +        self._dl_status.configure(text="Cancelling...", text_c
+          +olor=styles.WARNING)                                          
+      423  
+      328 -        self._emulator_proc = None                            
+      329 -        self._stop_emu_btn.configure(state="disabled")        
+      330 -        self._start_emu_btn.configure(state="normal")         
+      331 -        self._emu_status.configure(text="Emulator stopped.", t
+          -ext_color=styles.TEXT_MUTED)                                  
+      332 -                                                              
+      424      # --------------------------------------------------------
+           ---------- #
+      425      #  Public API                                             
+                        #
+      426      # --------------------------------------------------------
+           ---------- #
+  ⎿  You've hit your limit · resets 12pm (America/Chicago)
+     /upgrade or /extra-usage to finish what you’re working on.
+
+✻ Crunched for 2m 31s

@@ -89,7 +89,7 @@ public class LogInjector {
             })
         );
 
-        soot.Main.main(new String[]{"-process-dir", apkInput});
+        soot.Main.main(new String[]{"-process-dir", apkInput, "-force-overwrite"});
 
         System.out.println("Injection complete. Injected: " + injected.get()
                 + "  Skipped: " + skipped.get()

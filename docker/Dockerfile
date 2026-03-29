@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     unzip \
     zipalign \
     python3 \
+    aapt \
     && rm -rf /var/lib/apt/lists/*
 
 # Install apksigner from Android Build Tools

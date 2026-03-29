@@ -73,6 +73,11 @@ def inject_apks(
         on_log(f"    Output  : {apk_output_dir}")
         on_log(f"    Filter  : {', '.join(class_filter) if class_filter else '(all classes)'}")
 
+        # Wipe any previous output so Soot always writes fresh (force-overwrite)
+        if os.path.isdir(apk_output_dir):
+            shutil.rmtree(apk_output_dir, ignore_errors=True)
+            on_log(f"    Cleared previous output dir.")
+
         success = docker_runner.run_injection(
             primary_apk=primary_apk,
             apk_files=apk_files,

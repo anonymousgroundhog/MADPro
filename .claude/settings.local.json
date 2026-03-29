@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker --version)",
+      "Bash(python3 -c \"import tkinter; print\\(''tkinter available''\\)\")",
+      "Bash(python3 -c \"import PyQt6; print\\(''PyQt6 available''\\)\")",
+      "Bash(python3 -c \"import PyQt5; print\\(''PyQt5 available''\\)\")",
+      "Bash(python3 -c \"import customtkinter; print\\(''customtkinter available''\\)\")",
+      "Bash(pip3 list:*)",
+      "Bash(pip3 show:*)",
+      "Bash(java --version)",
+      "Bash(java -version)",
+      "Bash(python3:*)",
+      "Bash(pip3 install:*)",
+      "Bash(sudo apt-get:*)"
+    ]
+  }
+}

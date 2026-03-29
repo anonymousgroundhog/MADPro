@@ -20,7 +20,15 @@
       "Bash(sdkmanager --version)",
       "Bash(/usr/bin/sdkmanager --list)",
       "Bash(~/Android/Sdk/cmdline-tools/latest/bin/sdkmanager --list)",
-      "Bash(sort -t';' -k2 -V)"
+      "Bash(sort -t';' -k2 -V)",
+      "Bash(pip show:*)",
+      "Bash(curl -s https://pypi.org/pypi/gplaycli/json)",
+      "Bash(curl -s https://raw.githubusercontent.com/EFForg/apkeep/master/USAGE-google-play.md)",
+      "Bash(curl -s https://api.github.com/repos/EFForg/apkeep/issues/231)",
+      "Bash(npm list:*)",
+      "Read(//home/sean/.nvm/versions/**)",
+      "Read(//usr/local/bin/**)",
+      "Bash(node -e \"require\\(''''child_process''''\\).execSync\\(''''npm root -g'''', {encoding:''''utf8''''}\\)\")"
     ]
   }
 }

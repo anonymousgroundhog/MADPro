@@ -48,8 +48,8 @@ class DownloadView(ctk.CTkFrame):
 
         self._log.append("Select categories and click Start Download.")
         self._log.append(
-            "APKs are downloaded via apkeep from ApkPure (no auth) "
-            "or Google Play (AAS token required)."
+            "ApkPure: downloads via apkeep (no auth required). "
+            "Google Play: automates the Play Store on your emulator via Appium."
         )
 
     # ------------------------------------------------------------------ #
@@ -65,64 +65,109 @@ class DownloadView(ctk.CTkFrame):
         count = self._category_panel.get_count()
         output_dir = self._download_panel.get_output_dir()
         backend = self._download_panel.get_backend()
-        email = self._download_panel.get_email()
-        token = self._download_panel.get_token()
-
-        if backend == "google-play" and (not email or not token):
-            self._log.append(
-                "Google Play selected but email/token are empty. "
-                "Switch to ApkPure or provide credentials."
-            )
-            return
 
         from core.apk_downloader import get_top_packages, DownloadJob
 
-        # Build jobs
-        jobs = []
-        for cat_id, cat_name in selected_cats:
-            packages = get_top_packages(
-                cat_id, count, backend,
-                on_log=self._log.append)
-            if packages:
-                jobs.append(DownloadJob(
-                    category_id=cat_id,
-                    category_name=cat_name,
-                    packages=packages,
-                    output_dir=output_dir,
-                    backend=backend,
-                    gplay_email=email,
-                    gplay_token=token,
-                ))
-
-        if not jobs:
-            self._log.append("No packages found for the selected categories.")
-            return
-
-        total_pkgs = sum(len(j.packages) for j in jobs)
-        self._log.append(
-            f"--- Starting download: {len(jobs)} categor(ies), "
-            f"{total_pkgs} app(s), backend={backend} ---"
-        )
-
-        stop_event = threading.Event()
-        self._download_panel.set_busy(True, stop_event)
-
-        def worker():
-            from core.apk_downloader import run_download_jobs
-            results = run_download_jobs(
-                jobs=jobs,
-                on_log=self._log.append,
-                on_progress=lambda c, t: self.after(
-                    0, lambda: self._download_panel.set_progress(c, t)),
-                stop_event=stop_event,
+        if backend == "google-play":
+            # Collect all packages across categories then hand to Appium
+            from core.appium_downloader import (
+                is_appium_available, is_uia2_driver_installed,
+                start_appium_server, download_via_appium,
             )
-            self.after(0, lambda: self._on_done(results))
+            if not is_appium_available() or not is_uia2_driver_installed():
+                self._log.append(
+                    "Appium is not set up. Select Google Play source and "
+                    "click Setup Appium first."
+                )
+                return
+
+            all_packages: list[str] = []
+            for cat_id, cat_name in selected_cats:
+                pkgs = get_top_packages(cat_id, count, backend,
+                                        on_log=self._log.append)
+                all_packages.extend(pkgs)
+
+            if not all_packages:
+                self._log.append("No packages found for the selected categories.")
+                return
+
+            device_serial = self._device_panel.get_selected_serial()
+            self._log.append(
+                f"--- Starting Appium download: {len(all_packages)} app(s) "
+                f"via Play Store on {device_serial or 'first available device'} ---"
+            )
+
+            self._stop_event = threading.Event()
+            stop_event = self._stop_event
+            self._download_panel.set_busy(True, stop_event)
+
+            def worker():
+                self._log.append("Starting Appium server...")
+                start_appium_server(on_output=self._log.append)
+                pulled = download_via_appium(
+                    packages=all_packages,
+                    output_dir=output_dir,
+                    device_serial=device_serial,
+                    on_output=self._log.append,
+                    stop_event=stop_event,
+                )
+                if stop_event.is_set():
+                    self.after(0, lambda: self._on_done({}))
+                    return
+                results = {p: ("ok" if any(p in path for path in pulled)
+                               else "failed")
+                           for p in all_packages}
+                self.after(0, lambda: self._on_done(results))
+
+        else:
+            # ApkPure via apkeep
+            jobs = []
+            for cat_id, cat_name in selected_cats:
+                packages = get_top_packages(cat_id, count, backend,
+                                            on_log=self._log.append)
+                if packages:
+                    jobs.append(DownloadJob(
+                        category_id=cat_id,
+                        category_name=cat_name,
+                        packages=packages,
+                        output_dir=output_dir,
+                        backend=backend,
+                    ))
+
+            if not jobs:
+                self._log.append("No packages found for the selected categories.")
+                return
+
+            total_pkgs = sum(len(j.packages) for j in jobs)
+            self._log.append(
+                f"--- Starting download: {len(jobs)} categor(ies), "
+                f"{total_pkgs} app(s), backend=apkpure ---"
+            )
+
+            self._stop_event = threading.Event()
+            stop_event = self._stop_event
+            self._download_panel.set_busy(True, stop_event)
+
+            def worker():
+                from core.apk_downloader import run_download_jobs
+                results = run_download_jobs(
+                    jobs=jobs,
+                    on_log=self._log.append,
+                    on_progress=lambda c, t: self.after(
+                        0, lambda: self._download_panel.set_progress(c, t)),
+                    stop_event=stop_event,
+                )
+                self.after(0, lambda: self._on_done(results))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _cancel_download(self):
-        # Cancel is handled by DownloadPanel setting the stop_event
-        pass
+        if hasattr(self, "_stop_event") and self._stop_event:
+            self._stop_event.set()
+        # Force-quit any active Appium session so WebDriverWait unblocks
+        from core.appium_downloader import cancel_active_session
+        cancel_active_session(on_output=self._log.append)
+        self._log.append("Cancelling download...")
 
     def _on_done(self, results: dict[str, str]):
         self._download_panel.set_busy(False)

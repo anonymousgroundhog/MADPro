@@ -69,45 +69,48 @@ class DownloadPanel(ctk.CTkFrame):
         ).pack(side="left", padx=(4, styles.PAD))
 
         ctk.CTkRadioButton(
-            backend_row, text="Google Play  (token required)",
+            backend_row, text="Google Play  (Appium automation)",
             variable=self._backend_var, value="google-play",
             font=styles.FONT_BODY, text_color=styles.TEXT_PRIMARY,
             fg_color=styles.ACCENT, hover_color=styles.ACCENT_HOVER,
             command=self._on_backend_changed,
         ).pack(side="left")
 
-        # Google Play auth fields (hidden by default)
-        self._auth_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self._auth_frame.pack(fill="x", padx=styles.PAD,
-                               pady=(0, styles.PAD_SMALL))
+        # Appium setup panel (hidden until google-play selected)
+        self._auth_frame = ctk.CTkFrame(self, fg_color=styles.BG_CARD,
+                                         corner_radius=styles.CORNER_RADIUS)
 
-        email_row = ctk.CTkFrame(self._auth_frame, fg_color="transparent")
-        email_row.pack(fill="x", pady=(0, 2))
-        ctk.CTkLabel(email_row, text="Email:", font=styles.FONT_SMALL,
-                     text_color=styles.TEXT_SECONDARY, width=55).pack(side="left")
-        self._email_var = tk.StringVar()
-        ctk.CTkEntry(email_row, textvariable=self._email_var,
-                     placeholder_text="Google account email",
-                     font=styles.FONT_BODY, fg_color=styles.BG_PRIMARY,
-                     border_color=styles.BG_CARD).pack(
-            side="left", fill="x", expand=True, padx=(4, 0))
+        ctk.CTkLabel(
+            self._auth_frame,
+            text="Appium automates the Play Store on your running emulator.\n"
+                 "No Google account token required — just sign in to the emulator first.",
+            font=styles.FONT_SMALL, text_color=styles.TEXT_SECONDARY,
+            justify="left", anchor="w", wraplength=600,
+        ).pack(anchor="w", padx=styles.PAD_SMALL, pady=(styles.PAD_SMALL, 4))
 
-        token_row = ctk.CTkFrame(self._auth_frame, fg_color="transparent")
-        token_row.pack(fill="x")
-        ctk.CTkLabel(token_row, text="Token:", font=styles.FONT_SMALL,
-                     text_color=styles.TEXT_SECONDARY, width=55).pack(side="left")
-        self._token_var = tk.StringVar()
-        ctk.CTkEntry(token_row, textvariable=self._token_var,
-                     placeholder_text="AAS token (from gplaycli --token)",
-                     show="•", font=styles.FONT_BODY,
-                     fg_color=styles.BG_PRIMARY,
-                     border_color=styles.BG_CARD).pack(
-            side="left", fill="x", expand=True, padx=(4, 0))
+        appium_btn_row = ctk.CTkFrame(self._auth_frame, fg_color="transparent")
+        appium_btn_row.pack(fill="x", padx=styles.PAD_SMALL,
+                             pady=(0, styles.PAD_SMALL))
+
+        self._appium_setup_btn = ctk.CTkButton(
+            appium_btn_row, text="Setup Appium", width=130,
+            font=styles.FONT_SMALL, fg_color=styles.BG_PRIMARY,
+            hover_color=styles.ACCENT,
+            command=self._run_appium_setup,
+        )
+        self._appium_setup_btn.pack(side="left", padx=(0, styles.PAD_SMALL))
+
+        self._appium_status = ctk.CTkLabel(
+            appium_btn_row, text="Not checked",
+            font=styles.FONT_SMALL, text_color=styles.TEXT_MUTED, anchor="w",
+        )
+        self._appium_status.pack(side="left", fill="x", expand=True)
 
         self._auth_frame.pack_forget()  # hidden until google-play selected
 
         # Buttons
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        self._btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row = self._btn_row
         btn_row.pack(fill="x", padx=styles.PAD, pady=(0, styles.PAD_SMALL))
 
         self._start_btn = ctk.CTkButton(
@@ -160,9 +163,60 @@ class DownloadPanel(ctk.CTkFrame):
         if self._backend_var.get() == "google-play":
             self._auth_frame.pack(fill="x", padx=styles.PAD,
                                    pady=(0, styles.PAD_SMALL),
-                                   before=self._status.master)
+                                   before=self._btn_row)
+            # Check Appium status in background
+            threading.Thread(target=self._check_appium_status,
+                              daemon=True).start()
         else:
             self._auth_frame.pack_forget()
+
+    def _check_appium_status(self):
+        from core.appium_downloader import (
+            is_appium_available, is_uia2_driver_installed,
+            is_appium_server_running,
+        )
+        if is_appium_server_running():
+            self.after(0, lambda: self._appium_status.configure(
+                text="Appium server running — Ready",
+                text_color=styles.SUCCESS))
+        elif is_appium_available() and is_uia2_driver_installed():
+            self.after(0, lambda: self._appium_status.configure(
+                text="Ready (start the Appium server before downloading)",
+                text_color=styles.SUCCESS))
+        elif is_appium_available():
+            self.after(0, lambda: self._appium_status.configure(
+                text="Appium found — uiautomator2 driver missing. Click Setup.",
+                text_color=styles.WARNING))
+        else:
+            self.after(0, lambda: self._appium_status.configure(
+                text="Appium not found. Click Setup or start Appium Desktop.",
+                text_color=styles.WARNING))
+
+    def _run_appium_setup(self):
+        self._appium_setup_btn.configure(state="disabled", text="Setting up...")
+        self._appium_status.configure(text="Installing...",
+                                       text_color=styles.INFO)
+
+        def worker():
+            from core.appium_downloader import setup_appium
+            ok = setup_appium(
+                on_output=lambda msg: self.after(
+                    0, lambda m=msg: self._appium_status.configure(
+                        text=m[:80], text_color=styles.TEXT_SECONDARY)),
+            )
+            def done():
+                self._appium_setup_btn.configure(state="normal",
+                                                  text="Setup Appium")
+                if ok:
+                    self._appium_status.configure(text="Ready",
+                                                   text_color=styles.SUCCESS)
+                else:
+                    self._appium_status.configure(
+                        text="Setup failed — check Node.js is installed.",
+                        text_color=styles.ERROR)
+            self.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _browse_output(self):
         d = filedialog.askdirectory(title="Select Download Output Directory")
@@ -191,12 +245,6 @@ class DownloadPanel(ctk.CTkFrame):
 
     def get_backend(self) -> str:
         return self._backend_var.get()
-
-    def get_email(self) -> str:
-        return self._email_var.get().strip()
-
-    def get_token(self) -> str:
-        return self._token_var.get().strip()
 
     def set_status(self, text: str, color: str = styles.TEXT_SECONDARY):
         self._status.configure(text=text, text_color=color)

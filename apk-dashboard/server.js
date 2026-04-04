@@ -24,6 +24,31 @@ for (let i = 0; i < args.length; i++) {
   if (args[i] === "--port" && args[i + 1]) PORT = parseInt(args[++i], 10);
 }
 
+// ── Settings (persisted to disk) ────────────────────────────────────────────
+
+const SETTINGS_PATH = path.join(__dirname, "settings.json");
+
+const DEFAULT_SETTINGS = {
+  openwebui_url: "http://localhost:3000",
+  openwebui_key: "",
+  openwebui_model: "",
+};
+
+function loadSettings() {
+  try {
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf8")) };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+function saveSettings(obj) {
+  const current = loadSettings();
+  const merged = { ...current, ...obj };
+  fs.writeFileSync(SETTINGS_PATH, JSON.stringify(merged, null, 2));
+  return merged;
+}
+
 // ── In-memory state ─────────────────────────────────────────────────────────
 
 let state = {
@@ -167,6 +192,46 @@ function jsonResponse(res, data, status = 200) {
 function htmlResponse(res, html) {
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(html);
+}
+
+// Parse a logcat file and return all SootInjection entries
+function parseLogEntries(absPath) {
+  const content = fs.readFileSync(absPath, "utf8");
+  const MARKER = "Entering method: ";
+  const SIG_RE = /^<(.+):\s+(\S+)\s+([^(]+)\(([^)]*)\)>$/;
+  const entries = [];
+  const seen = new Set();
+  for (const line of content.split("\n")) {
+    const idx = line.indexOf(MARKER);
+    if (idx === -1) continue;
+    const sig = line.slice(idx + MARKER.length).trim();
+    const m = SIG_RE.exec(sig);
+    if (m) {
+      const className  = m[1].trim();
+      const returnType = m[2].trim();
+      const methodName = m[3].trim();
+      const args       = m[4].trim();
+      const key = className + "#" + methodName + "(" + args + ")";
+      entries.push({ className, returnType, methodName, args, sig, key, duplicate: seen.has(key) });
+      seen.add(key);
+    } else {
+      entries.push({ className: null, returnType: null, methodName: null, args: null, sig, key: sig, duplicate: false });
+    }
+  }
+  return entries;
+}
+
+// Match a single log entry against a cleaned query string (case-insensitive).
+// Query is the cleaned keyword + "(" e.g. "onCreate("
+// Matches against methodName + "(" so partial method names work.
+function entryMatchesQuery(e, queryLow) {
+  if (e.methodName) {
+    const mn = (e.methodName + "(").toLowerCase();
+    if (mn.indexOf(queryLow) !== -1) return true;
+  }
+  // Fallback: check full sig for raw entries
+  if (e.sig && e.sig.toLowerCase().indexOf(queryLow) !== -1) return true;
+  return false;
 }
 
 // ── HTML ────────────────────────────────────────────────────────────────────
@@ -484,6 +549,8 @@ function renderHtml() {
   <button class="tab-btn active" id="tabBtnKanban" onclick="switchTab('kanban')">📋 Kanban Board</button>
   <button class="tab-btn" id="tabBtnTools" onclick="switchTab('tools')">🔧 Tools</button>
   <button class="tab-btn" id="tabBtnLogs" onclick="switchTab('logs')">🔍 Log Viewer</button>
+  <button class="tab-btn" id="tabBtnFsm" onclick="switchTab('fsm')">🔬 FSM Analyzer</button>
+  <button class="tab-btn" id="tabBtnSettings" onclick="switchTab('settings')" style="margin-left:auto;">⚙ Settings</button>
 </div>
 
 <!-- ── Kanban tab content ── -->
@@ -642,10 +709,156 @@ function renderHtml() {
   <div id="logViewerOutput" style="
     background:var(--card-bg); border:1px solid var(--card-border); border-radius:8px;
     padding:14px 16px; font-family:monospace; font-size:.78rem; line-height:1.6;
-    white-space:pre-wrap; word-break:break-all; max-height:65vh; overflow-y:auto;
+    white-space:pre-wrap; word-break:break-all; max-height:45vh; overflow-y:auto;
     color:var(--text);
   ">Select a log directory and file above.</div>
+
+  <!-- FSM Model + Keyword Search -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px;align-items:start;">
+
+    <!-- Left: keyword search -->
+    <div>
+      <div style="font-weight:700;font-size:.9rem;color:var(--accent-no-ads);margin-bottom:10px;">Keyword Search</div>
+      <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:6px;">Enter keywords (one per line) to check against loaded log entries:</div>
+      <textarea id="kwInput" rows="8" style="
+        width:100%;box-sizing:border-box;background:var(--card-bg);border:1px solid var(--card-border);
+        color:var(--text);padding:10px 12px;border-radius:8px;font-family:monospace;font-size:.82rem;
+        line-height:1.6;resize:vertical;
+      " placeholder="attachInfo&#10;onCreate&#10;onPause&#10;onResume&#10;onDestroy"></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+        <button class="tools-btn-primary" onclick="runKeywordSearch()">Search</button>
+        <button class="tools-btn-sm" onclick="clearKeywordSearch()">Clear</button>
+      </div>
+      <div id="kwResults" style="margin-top:14px;"></div>
+    </div>
+
+    <!-- Right: FSM model image -->
+    <div>
+      <div style="font-weight:700;font-size:.9rem;color:var(--accent-no-ads);margin-bottom:10px;">FSM Model</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+        <input type="text" id="modelImagePath" class="tools-input" style="flex:1;" placeholder="/home/user/model.png" value="/api/model-image" />
+        <button class="tools-btn-sm" onclick="loadModelImage()">Load</button>
+      </div>
+      <div id="modelImageWrap" style="
+        background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;
+        padding:8px;overflow:auto;text-align:center;cursor:zoom-in;
+      " onclick="toggleModelZoom(this)">
+        <img id="modelImage" src="/api/model-image" alt="FSM Model"
+          style="max-width:100%;height:auto;border-radius:4px;display:block;margin:0 auto;"
+          onerror="this.style.display='none';document.getElementById('modelImageErr').style.display='';" />
+        <div id="modelImageErr" style="display:none;color:var(--text-muted);font-size:.82rem;padding:20px;">
+          No model image found. Place model.png in the project root or enter a path above.
+        </div>
+      </div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">Click image to zoom in/out.</div>
+    </div>
+
+  </div>
 </div><!-- /tabLogs -->
+
+<!-- ── FSM Analyzer tab content ── -->
+<div id="tabFsm" style="display:none; padding:20px 24px;">
+
+  <!-- Top bar: log file picker (mirrors Log Viewer) -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:260px;">
+      <input type="text" id="fsmLogDirInput" class="tools-input" style="flex:1;" placeholder="~/MADPro_Logcat" />
+      <button class="tools-btn-sm" onclick="browseForTools('fsmLogDirInput')">Browse…</button>
+      <button class="tools-btn-sm" onclick="fsmRefreshLogList()">Load</button>
+    </div>
+    <select id="fsmLogFileSelect" class="tools-input" style="min-width:220px;max-width:340px;" onchange="fsmOnFileChange()">
+      <option value="">— select a log file —</option>
+    </select>
+    <button class="tools-btn-sm" onclick="fsmRefreshLogList()">Refresh</button>
+  </div>
+  <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:12px;" id="fsmLogMeta"></div>
+
+  <!-- Two-column: drop zone left, results right -->
+  <div style="display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start;">
+
+    <!-- Left: FSM image drop zone + controls -->
+    <div>
+      <div style="font-weight:700;font-size:.85rem;color:var(--accent-no-ads);margin-bottom:8px;">FSM Model Image</div>
+
+      <!-- Drop zone -->
+      <div id="fsmDropZone" style="
+        border:2px dashed var(--card-border);border-radius:10px;padding:24px 16px;
+        text-align:center;cursor:pointer;transition:border-color .15s;min-height:160px;
+        display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+        background:var(--card-bg);
+      "
+        onclick="document.getElementById('fsmImageInput').click()"
+        ondragover="event.preventDefault();this.style.borderColor='var(--accent-no-ads)'"
+        ondragleave="this.style.borderColor='var(--card-border)'"
+        ondrop="fsmHandleDrop(event)">
+        <div id="fsmDropLabel" style="color:var(--text-muted);font-size:.82rem;pointer-events:none;">
+          Drop FSM image here<br>or click to browse
+        </div>
+        <img id="fsmDropPreview" style="max-width:100%;max-height:160px;border-radius:6px;display:none;" />
+      </div>
+      <input type="file" id="fsmImageInput" accept="image/*" style="display:none;" onchange="fsmHandleFileInput(this)" />
+
+      <button class="tools-btn-primary" id="fsmAnalyzeBtn" style="width:100%;margin-top:10px;" onclick="runFsmAnalysis()" disabled>
+        Analyze with AI
+      </button>
+      <div id="fsmAnalyzeStatus" style="font-size:.78rem;margin-top:6px;min-height:1.2em;color:var(--text-muted);text-align:center;"></div>
+
+      <!-- Extracted keywords -->
+      <div id="fsmKeywordsBox" style="display:none;margin-top:14px;">
+        <div style="font-weight:700;font-size:.82rem;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em;">EXTRACTED TRANSITIONS</div>
+        <div id="fsmKeywordsList" style="font-size:.78rem;line-height:1.9;"></div>
+      </div>
+    </div>
+
+    <!-- Right: violations + call sequence -->
+    <div>
+      <div style="font-weight:700;font-size:.85rem;color:var(--accent-no-ads);margin-bottom:8px;">Analysis Results</div>
+      <div id="fsmResultsBox" style="
+        background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;
+        padding:16px;min-height:220px;font-size:.8rem;color:var(--text-muted);
+      ">Drop an FSM model image and select a log file, then click Analyze.</div>
+    </div>
+
+  </div>
+</div><!-- /tabFsm -->
+
+<!-- ── Settings tab content ── -->
+<div id="tabSettings" style="display:none; padding:20px 24px; max-width:640px;">
+  <div style="font-weight:700;font-size:1rem;color:var(--accent-no-ads);margin-bottom:20px;">Settings</div>
+
+  <!-- OpenWebUI section -->
+  <div style="background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;padding:20px;margin-bottom:16px;">
+    <div style="font-weight:700;font-size:.88rem;margin-bottom:4px;">OpenWebUI</div>
+    <div style="font-size:.78rem;color:var(--text-muted);margin-bottom:16px;">
+      Used by the FSM Analyzer to extract transitions from model images via vision AI.
+      Point this at your OpenWebUI instance (must have a vision-capable model).
+    </div>
+
+    <label style="font-size:.8rem;color:var(--text-muted);display:block;margin-bottom:4px;">Server URL</label>
+    <input type="text" id="settingsOwUrl" class="tools-input" style="width:100%;margin-bottom:12px;box-sizing:border-box;"
+      placeholder="http://localhost:3000" />
+
+    <label style="font-size:.8rem;color:var(--text-muted);display:block;margin-bottom:4px;">API Key</label>
+    <input type="password" id="settingsOwKey" class="tools-input" style="width:100%;margin-bottom:12px;box-sizing:border-box;"
+      placeholder="sk-…" autocomplete="off" />
+
+    <label style="font-size:.8rem;color:var(--text-muted);display:block;margin-bottom:4px;">Model</label>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+      <input type="text" id="settingsOwModel" class="tools-input" style="flex:1;"
+        placeholder="e.g. llava:latest or gpt-4o" />
+      <button class="tools-btn-sm" onclick="settingsFetchModels()">Fetch Models</button>
+    </div>
+    <select id="settingsOwModelSelect" class="tools-input" style="width:100%;margin-bottom:4px;display:none;" onchange="document.getElementById('settingsOwModel').value=this.value">
+    </select>
+    <div id="settingsModelsStatus" style="font-size:.72rem;color:var(--text-muted);min-height:1.2em;margin-bottom:12px;"></div>
+
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="tools-btn-primary" onclick="settingsSave()">Save</button>
+      <button class="tools-btn-sm" onclick="settingsTest()">Test Connection</button>
+      <span id="settingsSaveStatus" style="font-size:.78rem;color:var(--text-muted);"></span>
+    </div>
+  </div>
+</div><!-- /tabSettings -->
 
 <!-- Export PDF Modal -->
 <div class="modal-overlay" id="exportModal" onclick="handleExportOverlayClick(event)">
@@ -1136,14 +1349,20 @@ async function doExport() {
 // ── Tab switching ────────────────────────────────────────────────────────────
 
 function switchTab(name) {
-  document.getElementById('tabKanban').style.display = name === 'kanban' ? '' : 'none';
-  document.getElementById('tabTools').style.display  = name === 'tools'  ? '' : 'none';
-  document.getElementById('tabLogs').style.display   = name === 'logs'   ? '' : 'none';
+  document.getElementById('tabKanban').style.display   = name === 'kanban'   ? '' : 'none';
+  document.getElementById('tabTools').style.display    = name === 'tools'    ? '' : 'none';
+  document.getElementById('tabLogs').style.display     = name === 'logs'     ? '' : 'none';
+  document.getElementById('tabFsm').style.display      = name === 'fsm'      ? '' : 'none';
+  document.getElementById('tabSettings').style.display = name === 'settings' ? '' : 'none';
   document.getElementById('tabBtnKanban').classList.toggle('active', name === 'kanban');
   document.getElementById('tabBtnTools').classList.toggle('active', name === 'tools');
   document.getElementById('tabBtnLogs').classList.toggle('active', name === 'logs');
-  if (name === 'tools') initToolsTab();
-  if (name === 'logs') initLogsTab();
+  document.getElementById('tabBtnFsm').classList.toggle('active', name === 'fsm');
+  document.getElementById('tabBtnSettings').classList.toggle('active', name === 'settings');
+  if (name === 'tools')    initToolsTab();
+  if (name === 'logs')     initLogsTab();
+  if (name === 'fsm')      fsmInitTab();
+  if (name === 'settings') settingsInit();
 }
 
 // ── Tools tab ────────────────────────────────────────────────────────────────
@@ -1413,18 +1632,37 @@ async function refreshLogFileList() {
   }
 }
 
+const LOG_PAGE = 300; // rows shown per page in the viewer
+let _currentLogFile = '';
+
 async function loadLogFile() {
   const file = document.getElementById('logFileSelect').value;
   if (!file) return;
+  _currentLogFile = file;
+  _fsmLogEntries = [];
+  await _renderLogPage(file, 0);
+}
+
+async function _renderLogPage(file, offset) {
+  const out = document.getElementById('logViewerOutput');
+  if (offset === 0) {
+    out.innerHTML = '<span style="color:var(--text-muted)">Loading…</span>';
+    document.getElementById('logViewerMeta').textContent = 'Loading…';
+  }
   try {
-    const data = await api('/api/logs/read?file=' + encodeURIComponent(file));
-    const out = document.getElementById('logViewerOutput');
-    if (!data.entries || !data.entries.length) {
-      out.textContent = '(No SootInjection lines found in this log file)';
-      document.getElementById('logViewerMeta').textContent = '0 matches in ' + file;
-      return;
+    const data = await api('/api/logs/read?file=' + encodeURIComponent(file) + '&offset=' + offset + '&limit=' + LOG_PAGE);
+    if (offset === 0) {
+      out.innerHTML = '';
+      if (!data.total) {
+        out.textContent = '(No SootInjection lines found in this log file)';
+        document.getElementById('logViewerMeta').textContent = '0 matches in ' + file;
+        return;
+      }
     }
-    out.innerHTML = '';
+    // Remove existing load-more button if present
+    const old = document.getElementById('logLoadMore');
+    if (old) old.remove();
+
     for (const e of data.entries) {
       const row = document.createElement('div');
       row.style.cssText = 'padding:3px 0; border-bottom:1px solid rgba(255,255,255,.04); display:flex; gap:12px; align-items:baseline;';
@@ -1446,12 +1684,25 @@ async function loadLogFile() {
       }
       out.appendChild(row);
     }
-    const unique = data.entries.filter(e => !e.duplicate).length;
+
+    const shown = offset + data.entries.length;
+    const unique = data.unique;
     document.getElementById('logViewerMeta').textContent =
-      data.entries.length + ' call(s), ' + unique + ' unique methods — ' + file;
-    out.scrollTop = 0;
+      'Showing ' + shown + ' of ' + data.total + ' call(s), ' + unique + ' unique methods — ' + file;
+
+    if (shown < data.total) {
+      const btn = document.createElement('button');
+      btn.id = 'logLoadMore';
+      btn.className = 'tools-btn-sm';
+      btn.style.cssText = 'margin:8px auto;display:block;';
+      btn.textContent = 'Load more (' + (data.total - shown) + ' remaining)';
+      btn.onclick = function() { _renderLogPage(file, shown); };
+      out.appendChild(btn);
+    }
+
+    if (offset === 0) out.scrollTop = 0;
   } catch (e) {
-    document.getElementById('logViewerOutput').textContent = 'Error loading file: ' + e.message;
+    out.textContent = 'Error loading file: ' + e.message;
   }
 }
 
@@ -1459,6 +1710,9 @@ function clearLogViewer() {
   document.getElementById('logViewerOutput').textContent = 'Select a log directory and file above.';
   document.getElementById('logViewerMeta').textContent = '';
   document.getElementById('logFileSelect').innerHTML = '<option value="">— select a log file —</option>';
+  _fsmLogEntries = [];
+  _currentLogFile = '';
+  clearKeywordSearch();
 }
 
 // ── Browse for tools fields ───────────────────────────────────────────────────
@@ -1559,6 +1813,442 @@ async function loadApkBrowserDir(dirPath) {
     if (s.scanning || s.enriching) pollStatus();
   } catch {}
 })();
+
+// ── Log Keyword Search ────────────────────────────────────────────────────────
+
+let _fsmLogEntries = []; // full entry objects from the currently loaded log
+
+// Strip special chars from a keyword, leaving only alphanumeric + underscore
+function cleanKeyword(kw) {
+  return kw.replace(/[^a-zA-Z0-9_]/g, '');
+}
+
+async function runKeywordSearch() {
+  var raw = document.getElementById('kwInput').value;
+  var keywords = raw.split('\\n').map(function(k) { return k.trim(); }).filter(function(k) { return k.length > 0; });
+  var out = document.getElementById('kwResults');
+  if (!keywords.length) { out.innerHTML = ''; return; }
+  if (!_currentLogFile) {
+    out.innerHTML = '<div style="color:var(--text-muted);font-size:.82rem;">Load a log file first.</div>';
+    return;
+  }
+
+  out.innerHTML = '<div style="color:var(--text-muted);font-size:.82rem;">Searching…</div>';
+
+  // Clean keywords: strip special chars, search as method name prefix (methodName + "(")
+  var palette = ['#60a5fa','#f472b6','#34d399','#fbbf24','#a78bfa','#f87171','#38bdf8','#fb923c'];
+  var kwMeta = keywords.map(function(kw, i) {
+    var clean = cleanKeyword(kw);
+    return { original: kw, clean: clean, query: clean + '(', color: palette[i % palette.length] };
+  });
+
+  // Fetch search results from server for all keywords in one call
+  try {
+    var queries = kwMeta.map(function(km) { return km.query; });
+    var data = await api('/api/logs/search?file=' + encodeURIComponent(_currentLogFile) + '&q=' + encodeURIComponent(JSON.stringify(queries)));
+
+    // data.results: [ { query, matches: [{entry, kwIdx}...] }, ... ]  (in log order)
+    // data.perKeyword: [ { query, count }, ... ]
+
+    var hitCount = data.perKeyword.filter(function(pk) { return pk.count > 0; }).length;
+    var total = kwMeta.length;
+    var summaryColor = hitCount === total ? '#22c55e' : hitCount > 0 ? '#f59e0b' : '#ef4444';
+    var summary = hitCount === total ? 'PASS' : hitCount > 0 ? 'PARTIAL' : 'FAIL';
+
+    // ── Summary banner + per-keyword rows ────────────────────────────────
+    var summaryRows = '';
+    for (var ki = 0; ki < kwMeta.length; ki++) {
+      var km = kwMeta[ki];
+      var pk = data.perKeyword[ki];
+      var found = pk.count > 0;
+      if (found) {}
+      var icon = found ? '&#x2713;' : '&#x2717;';
+      var displayQuery = km.clean ? escHtml(km.clean + '(') : '<em style="color:var(--text-muted)">empty after cleaning</em>';
+      summaryRows += '<div style="display:flex;align-items:center;gap:8px;font-size:.82rem;line-height:2;">'
+        + '<span style="color:' + km.color + ';font-weight:700;width:14px;">' + icon + '</span>'
+        + '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + km.color + ';flex-shrink:0;"></span>'
+        + '<span style="font-family:monospace;color:' + km.color + ';">' + displayQuery + '</span>'
+        + (km.original !== km.clean + '(' ? '<span style="font-size:.72rem;color:var(--text-muted);">(from: ' + escHtml(km.original) + ')</span>' : '')
+        + '<span style="color:var(--text-muted);">' + pk.count + ' match' + (pk.count !== 1 ? 'es' : '') + '</span>'
+        + '</div>';
+    }
+
+    var html = '<div style="font-size:.88rem;font-weight:700;color:' + summaryColor + ';margin-bottom:10px;padding:8px 12px;background:var(--card-bg);border:1px solid ' + summaryColor + ';border-radius:6px;">'
+      + summary + ' &mdash; ' + hitCount + ' / ' + total + ' keywords found</div>'
+      + '<div style="margin-bottom:16px;">' + summaryRows + '</div>';
+
+    // ── Ordered call sequence ─────────────────────────────────────────────
+    var seqRows = data.sequence; // [{entry, kwIndices}] in log order
+    html += '<div style="font-size:.8rem;font-weight:700;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em;">CALL SEQUENCE (' + seqRows.length + ' match' + (seqRows.length !== 1 ? 'es' : '') + ', log order)</div>';
+    html += '<div style="font-family:monospace;font-size:.75rem;background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;overflow-y:auto;max-height:400px;">';
+
+    if (seqRows.length === 0) {
+      html += '<div style="padding:20px;color:var(--text-muted);text-align:center;">No matches found.</div>';
+    }
+    for (var si = 0; si < seqRows.length; si++) {
+      var row = seqRows[si];
+      var e = row.entry;
+      var hitKws = row.kwIndices.map(function(i) { return kwMeta[i]; });
+      var rowColor = hitKws[0].color;
+
+      var entryText = e.className
+        ? e.className + ' -> ' + e.returnType + ' ' + e.methodName + '(' + e.args + ')'
+        : e.sig;
+
+      // Highlight matched method names in the display
+      var highlighted = escHtml(entryText);
+      for (var hi = 0; hi < hitKws.length; hi++) {
+        var hkw = hitKws[hi];
+        if (!hkw.clean) continue;
+        var re = new RegExp('(' + escHtml(hkw.clean) + ')', 'gi');
+        highlighted = highlighted.replace(re, '<mark style="background:' + hkw.color + '33;color:' + hkw.color + ';border-radius:2px;padding:0 1px;font-weight:bold;">$1</mark>');
+      }
+
+      var badges = hitKws.map(function(km) {
+        return '<span style="font-size:.68rem;padding:0 4px;border-radius:3px;background:' + km.color + '22;color:' + km.color + ';border:1px solid ' + km.color + '55;margin-right:3px;">' + escHtml(km.clean || km.original) + '</span>';
+      }).join('');
+
+      html += '<div style="display:flex;gap:10px;align-items:baseline;padding:5px 12px;border-bottom:1px solid rgba(255,255,255,.04);border-left:3px solid ' + rowColor + ';">'
+        + '<span style="color:var(--text-muted);flex-shrink:0;min-width:28px;text-align:right;font-size:.7rem;">#' + (si + 1) + '</span>'
+        + '<div style="min-width:0;flex:1;">'
+        + '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(entryText) + '">' + highlighted + '</div>'
+        + '<div style="margin-top:2px;">' + badges + '</div>'
+        + '</div></div>';
+    }
+    html += '</div>';
+
+    out.innerHTML = html;
+  } catch(err) {
+    out.innerHTML = '<div style="color:#ef4444;font-size:.82rem;">Search error: ' + escHtml(String(err)) + '</div>';
+  }
+}
+
+function clearKeywordSearch() {
+  document.getElementById('kwInput').value = '';
+  document.getElementById('kwResults').innerHTML = '';
+}
+
+function loadModelImage() {
+  var path = document.getElementById('modelImagePath').value.trim() || '/api/model-image';
+  var img = document.getElementById('modelImage');
+  var err = document.getElementById('modelImageErr');
+  img.style.display = '';
+  err.style.display = 'none';
+  img.src = path + '?t=' + Date.now();
+}
+
+function toggleModelZoom(wrap) {
+  var img = wrap.querySelector('img');
+  if (!img) return;
+  if (img.style.maxWidth === 'none') {
+    img.style.maxWidth = '100%';
+    wrap.style.cursor = 'zoom-in';
+  } else {
+    img.style.maxWidth = 'none';
+    wrap.style.cursor = 'zoom-out';
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+async function settingsInit() {
+  try {
+    var s = await api('/api/settings');
+    document.getElementById('settingsOwUrl').value   = s.openwebui_url   || '';
+    document.getElementById('settingsOwModel').value = s.openwebui_model || '';
+    // Key is masked server-side — show placeholder if set, blank if not
+    var keyInput = document.getElementById('settingsOwKey');
+    keyInput.value = '';
+    keyInput.placeholder = s.openwebui_key ? 'API key saved (enter new value to change)' : 'sk-…';
+  } catch(e) {
+    document.getElementById('settingsSaveStatus').textContent = 'Failed to load settings: ' + e.message;
+  }
+}
+
+async function settingsSave() {
+  var statusEl = document.getElementById('settingsSaveStatus');
+  statusEl.style.color = 'var(--text-muted)';
+  statusEl.textContent = 'Saving…';
+  try {
+    var payload = {
+      openwebui_url:   document.getElementById('settingsOwUrl').value.trim(),
+      openwebui_model: document.getElementById('settingsOwModel').value.trim(),
+    };
+    var keyVal = document.getElementById('settingsOwKey').value.trim();
+    if (keyVal) payload.openwebui_key = keyVal;
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    statusEl.style.color = '#22c55e';
+    statusEl.textContent = 'Saved.';
+    setTimeout(function() { statusEl.textContent = ''; }, 2000);
+  } catch(e) {
+    statusEl.style.color = '#ef4444';
+    statusEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function settingsFetchModels() {
+  var statusEl  = document.getElementById('settingsModelsStatus');
+  var selectEl  = document.getElementById('settingsOwModelSelect');
+  var url = document.getElementById('settingsOwUrl').value.trim();
+  var key = document.getElementById('settingsOwKey').value.trim(); // blank = use saved key
+  if (!url) { statusEl.textContent = 'Enter a server URL first.'; return; }
+  statusEl.textContent = 'Fetching models…';
+  selectEl.style.display = 'none';
+  try {
+    var data = await api('/api/settings/models?url=' + encodeURIComponent(url) + (key ? '&key=' + encodeURIComponent(key) : ''));
+    var models = data.models || [];
+    if (!models.length) { statusEl.textContent = 'No models returned.'; return; }
+    selectEl.innerHTML = '<option value="">— pick a model —</option>';
+    for (var i = 0; i < models.length; i++) {
+      var opt = document.createElement('option');
+      opt.value = models[i].id;
+      opt.textContent = models[i].id + (models[i].name && models[i].name !== models[i].id ? '  (' + models[i].name + ')' : '');
+      selectEl.appendChild(opt);
+    }
+    selectEl.style.display = '';
+    statusEl.textContent = models.length + ' model(s) found.';
+  } catch(e) {
+    statusEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function settingsTest() {
+  var statusEl = document.getElementById('settingsSaveStatus');
+  statusEl.style.color = 'var(--text-muted)';
+  statusEl.textContent = 'Testing…';
+  var url = document.getElementById('settingsOwUrl').value.trim();
+  var key = document.getElementById('settingsOwKey').value.trim();
+  if (!url) { statusEl.textContent = 'Enter a server URL first.'; return; }
+  try {
+    var data = await api('/api/settings/models?url=' + encodeURIComponent(url) + (key ? '&key=' + encodeURIComponent(key) : ''));
+    var n = (data.models || []).length;
+    statusEl.style.color = '#22c55e';
+    statusEl.textContent = 'Connected — ' + n + ' model(s) available.';
+  } catch(e) {
+    statusEl.style.color = '#ef4444';
+    statusEl.textContent = 'Connection failed: ' + e.message;
+  }
+}
+
+// ── FSM Analyzer ──────────────────────────────────────────────────────────────
+
+var _fsmImageBase64 = '';
+var _fsmImageMime   = 'image/png';
+var _fsmLogPath     = '';
+
+function fsmInitTab() {
+  var dir = document.getElementById('fsmLogDirInput').value.trim();
+  if (!dir) {
+    document.getElementById('fsmLogDirInput').value = '~/MADPro_Logcat';
+    fsmRefreshLogList();
+  }
+}
+
+async function fsmRefreshLogList() {
+  var dir = document.getElementById('fsmLogDirInput').value.trim() || '~/MADPro_Logcat';
+  try {
+    var data = await api('/api/logs/list?dir=' + encodeURIComponent(dir));
+    var sel = document.getElementById('fsmLogFileSelect');
+    var prev = sel.value;
+    sel.innerHTML = '<option value="">— select a log file —</option>';
+    for (var i = 0; i < (data.files || []).length; i++) {
+      var f = data.files[i];
+      var opt = document.createElement('option');
+      opt.value = f.path; opt.textContent = f.name;
+      sel.appendChild(opt);
+    }
+    if (prev && [...sel.options].some(function(o) { return o.value === prev; })) sel.value = prev;
+    document.getElementById('fsmLogMeta').textContent =
+      data.files.length ? data.files.length + ' log file(s) found' : 'No .log files found in ' + data.dir;
+  } catch(e) {
+    document.getElementById('fsmLogMeta').textContent = 'Error: ' + e.message;
+  }
+}
+
+function fsmOnFileChange() {
+  _fsmLogPath = document.getElementById('fsmLogFileSelect').value;
+  fsmCheckReady();
+}
+
+function fsmHandleDrop(ev) {
+  ev.preventDefault();
+  document.getElementById('fsmDropZone').style.borderColor = 'var(--card-border)';
+  var file = ev.dataTransfer.files[0];
+  if (file) fsmLoadImageFile(file);
+}
+
+function fsmHandleFileInput(input) {
+  if (input.files[0]) fsmLoadImageFile(input.files[0]);
+}
+
+function fsmLoadImageFile(file) {
+  _fsmImageMime = file.type || 'image/png';
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var dataUrl = e.target.result;
+    // dataUrl = "data:image/png;base64,XXXX"
+    _fsmImageBase64 = dataUrl.split(',')[1];
+    var preview = document.getElementById('fsmDropPreview');
+    preview.src = dataUrl;
+    preview.style.display = '';
+    document.getElementById('fsmDropLabel').style.display = 'none';
+    fsmCheckReady();
+  };
+  reader.readAsDataURL(file);
+}
+
+function fsmCheckReady() {
+  var ready = _fsmImageBase64 && _fsmLogPath;
+  document.getElementById('fsmAnalyzeBtn').disabled = !ready;
+}
+
+async function runFsmAnalysis() {
+  var statusEl = document.getElementById('fsmAnalyzeStatus');
+  var resultsEl = document.getElementById('fsmResultsBox');
+  var btn = document.getElementById('fsmAnalyzeBtn');
+  btn.disabled = true;
+  statusEl.textContent = 'Sending image to AI for analysis…';
+  resultsEl.innerHTML = '<div style="color:var(--text-muted);">Analyzing…</div>';
+  document.getElementById('fsmKeywordsBox').style.display = 'none';
+
+  try {
+    var resp = await fetch('/api/fsm/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imageBase64: _fsmImageBase64,
+        imageMime: _fsmImageMime,
+        logFile: _fsmLogPath
+      })
+    });
+    if (!resp.ok) {
+      var err = await resp.text();
+      throw new Error(err);
+    }
+    var data = await resp.json();
+    statusEl.textContent = 'Done.';
+    btn.disabled = false;
+    fsmRenderResults(data);
+  } catch(e) {
+    statusEl.textContent = 'Error: ' + e.message;
+    resultsEl.innerHTML = '<div style="color:#ef4444;font-size:.82rem;">' + escHtml(String(e)) + '</div>';
+    btn.disabled = false;
+  }
+}
+
+function fsmRenderResults(data) {
+  // data: { transitions, keywords, perKeyword, sequence, violations, totalEntries }
+  var palette = ['#60a5fa','#f472b6','#34d399','#fbbf24','#a78bfa','#f87171','#38bdf8','#fb923c'];
+
+  // ── Keywords panel ──────────────────────────────────────────────────────
+  var kwBox = document.getElementById('fsmKeywordsBox');
+  var kwList = document.getElementById('fsmKeywordsList');
+  kwList.innerHTML = '';
+  for (var i = 0; i < data.transitions.length; i++) {
+    var t = data.transitions[i];
+    var color = palette[i % palette.length];
+    var found = data.perKeyword[i] && data.perKeyword[i].count > 0;
+    var icon = found ? '&#x2713;' : '&#x2717;';
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:7px;padding:2px 0;';
+    row.innerHTML = '<span style="color:' + color + ';font-weight:700;width:12px;">' + icon + '</span>'
+      + '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + ';flex-shrink:0;"></span>'
+      + '<span style="font-family:monospace;color:' + color + ';flex:1;">' + escHtml(t.method + '(') + '</span>'
+      + '<span style="color:var(--text-muted);font-size:.72rem;">'
+      + escHtml(t.from) + ' &rarr; ' + escHtml(t.to)
+      + '</span>'
+      + '<span style="color:var(--text-muted);font-size:.72rem;margin-left:4px;">'
+      + (data.perKeyword[i] ? data.perKeyword[i].count + 'x' : '') + '</span>';
+    kwList.appendChild(row);
+  }
+  kwBox.style.display = '';
+
+  // ── Results panel ───────────────────────────────────────────────────────
+  var el = document.getElementById('fsmResultsBox');
+  var hitKw = data.perKeyword.filter(function(pk) { return pk.count > 0; }).length;
+  var totalKw = data.transitions.length;
+  var summaryColor = hitKw === totalKw ? '#22c55e' : hitKw > 0 ? '#f59e0b' : '#ef4444';
+  var summaryLabel = hitKw === totalKw ? 'PASS' : hitKw > 0 ? 'PARTIAL' : 'FAIL';
+
+  var html = '<div style="font-size:.88rem;font-weight:700;color:' + summaryColor + ';margin-bottom:12px;padding:8px 12px;background:var(--surface);border:1px solid ' + summaryColor + ';border-radius:6px;">'
+    + summaryLabel + ' &mdash; ' + hitKw + ' / ' + totalKw + ' transitions observed in log</div>';
+
+  // Violations section
+  if (data.violations && data.violations.length > 0) {
+    html += '<div style="font-weight:700;font-size:.8rem;color:#ef4444;margin-bottom:6px;letter-spacing:.04em;">VIOLATIONS (' + data.violations.length + ')</div>';
+    html += '<div style="margin-bottom:16px;">';
+    for (var vi = 0; vi < data.violations.length; vi++) {
+      var v = data.violations[vi];
+      html += '<div style="padding:6px 10px;background:#7f1d1d22;border:1px solid #ef444444;border-radius:6px;margin-bottom:6px;font-size:.78rem;">'
+        + '<span style="color:#ef4444;font-weight:700;">' + escHtml(v.type) + '</span>'
+        + '<span style="color:var(--text-muted);"> &mdash; </span>'
+        + '<span style="color:var(--text);font-family:monospace;">' + escHtml(v.detail) + '</span>'
+        + '</div>';
+    }
+    html += '</div>';
+  } else if (hitKw > 0) {
+    html += '<div style="color:#22c55e;font-size:.82rem;margin-bottom:16px;">No sequence violations detected.</div>';
+  }
+
+  // Call sequence
+  var seqRows = data.sequence || [];
+  html += '<div style="font-size:.8rem;font-weight:700;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em;">CALL SEQUENCE (' + seqRows.length + ' match' + (seqRows.length !== 1 ? 'es' : '') + ' of ' + data.totalEntries + ' total)</div>';
+  html += '<div style="font-family:monospace;font-size:.75rem;background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;overflow-y:auto;max-height:420px;">';
+
+  if (seqRows.length === 0) {
+    html += '<div style="padding:20px;color:var(--text-muted);text-align:center;">None of the FSM transition methods were found in this log.</div>';
+  }
+  for (var si = 0; si < seqRows.length; si++) {
+    var row = seqRows[si];
+    var e = row.entry;
+    var kwIdxs = row.kwIndices;
+    var rowColor = palette[kwIdxs[0] % palette.length];
+    var isViolation = row.violation;
+
+    var entryText = e.className
+      ? e.className + ' -> ' + e.returnType + ' ' + e.methodName + '(' + e.args + ')'
+      : e.sig;
+
+    var highlighted = escHtml(entryText);
+    for (var hi = 0; hi < kwIdxs.length; hi++) {
+      var t2 = data.transitions[kwIdxs[hi]];
+      if (!t2) continue;
+      var mname = t2.method.replace(new RegExp('[.*+?^$' + '{}()|[\\]\\\\]', 'g'), '\\$&');
+      var hcolor = palette[kwIdxs[hi] % palette.length];
+      highlighted = highlighted.replace(new RegExp('(' + mname + ')', 'gi'),
+        '<mark style="background:' + hcolor + '33;color:' + hcolor + ';border-radius:2px;padding:0 1px;font-weight:bold;">$1</mark>');
+    }
+
+    var badges = kwIdxs.map(function(idx) {
+      var t3 = data.transitions[idx];
+      var c = palette[idx % palette.length];
+      return '<span style="font-size:.67rem;padding:0 4px;border-radius:3px;background:' + c + '22;color:' + c + ';border:1px solid ' + c + '55;margin-right:3px;">'
+        + escHtml(t3 ? t3.method : '') + '</span>';
+    }).join('');
+
+    var violBadge = isViolation
+      ? '<span style="font-size:.67rem;padding:0 4px;border-radius:3px;background:#ef444422;color:#ef4444;border:1px solid #ef444455;margin-right:3px;">VIOLATION</span>'
+      : '';
+
+    var rowBg = isViolation ? 'background:#7f1d1d18;' : '';
+    html += '<div style="display:flex;gap:10px;align-items:baseline;padding:5px 12px;border-bottom:1px solid rgba(255,255,255,.04);border-left:3px solid ' + (isViolation ? '#ef4444' : rowColor) + ';' + rowBg + '">'
+      + '<span style="color:var(--text-muted);flex-shrink:0;min-width:28px;text-align:right;font-size:.7rem;">#' + (si + 1) + '</span>'
+      + '<div style="min-width:0;flex:1;">'
+      + '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(entryText) + '">' + highlighted + '</div>'
+      + '<div style="margin-top:2px;">' + violBadge + badges + '</div>'
+      + '</div></div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
 </script>
 </body>
 </html>`;
@@ -1645,40 +2335,57 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // GET /api/logs/read?file=/path — return parsed SootInjection entries from a log file
+  // GET /api/logs/read?file=/path&offset=0&limit=300
   if (req.method === "GET" && pathname === "/api/logs/read") {
     const fileParam = reqUrl.searchParams.get("file") || "";
     if (!fileParam) return jsonResponse(res, { error: "Missing file" }, 400);
     const abs = path.resolve(fileParam.replace(/^~/, os.homedir()));
+    const offset = Math.max(0, parseInt(reqUrl.searchParams.get("offset") || "0", 10));
+    const limit  = Math.min(2000, Math.max(1, parseInt(reqUrl.searchParams.get("limit") || "300", 10)));
     try {
-      const content = fs.readFileSync(abs, "utf8");
-      // Each injected line looks like:
-      //   04-04 15:51:45.020 D/SootInjection(12273): Entering method: <com.example.Foo: void bar(int)>
-      const MARKER = "Entering method: ";
-      // Soot sig: <com.example.ClassName: returnType methodName(args)>
-      // methodName may contain < > e.g. <init>, <clinit>
-      const SIG_RE = /^<(.+):\s+(\S+)\s+([^(]+)\(([^)]*)\)>$/;
-      const entries = [];
-      const seen = new Set();
-      for (const line of content.split("\n")) {
-        const idx = line.indexOf(MARKER);
-        if (idx === -1) continue;
-        const sig = line.slice(idx + MARKER.length).trim();
-        const m = SIG_RE.exec(sig);
-        if (m) {
-          const className = m[1].trim();
-          const returnType = m[2].trim();
-          const methodName = m[3].trim();
-          const args = m[4].trim();
-          const key = className + "#" + methodName + "(" + args + ")";
-          entries.push({ className, returnType, methodName, args, sig, key, duplicate: seen.has(key) });
-          seen.add(key);
-        } else {
-          // Fallback: couldn't parse sig, show raw
-          entries.push({ className: null, returnType: null, methodName: null, args: null, sig, key: sig, duplicate: false });
+      const entries = parseLogEntries(abs);
+      const unique = entries.filter(e => !e.duplicate).length;
+      return jsonResponse(res, {
+        file: abs,
+        total: entries.length,
+        unique,
+        entries: entries.slice(offset, offset + limit),
+      });
+    } catch (err) {
+      return jsonResponse(res, { error: err.message }, 500);
+    }
+  }
+
+  // GET /api/logs/search?file=/path&q=["keyword1(","keyword2("]
+  if (req.method === "GET" && pathname === "/api/logs/search") {
+    const fileParam = reqUrl.searchParams.get("file") || "";
+    const qParam    = reqUrl.searchParams.get("q") || "[]";
+    if (!fileParam) return jsonResponse(res, { error: "Missing file" }, 400);
+    const abs = path.resolve(fileParam.replace(/^~/, os.homedir()));
+    let queries;
+    try { queries = JSON.parse(qParam); } catch { return jsonResponse(res, { error: "Invalid q param" }, 400); }
+    if (!Array.isArray(queries)) return jsonResponse(res, { error: "q must be array" }, 400);
+    try {
+      const entries = parseLogEntries(abs);
+      const queriesLow = queries.map(q => q.toLowerCase());
+
+      // Per-keyword counts
+      const perKeyword = queriesLow.map((ql, i) => ({
+        query: queries[i],
+        count: entries.filter(e => entryMatchesQuery(e, ql)).length,
+      }));
+
+      // Ordered sequence: entries that match at least one keyword
+      const sequence = [];
+      for (const e of entries) {
+        const kwIndices = [];
+        for (let i = 0; i < queriesLow.length; i++) {
+          if (entryMatchesQuery(e, queriesLow[i])) kwIndices.push(i);
         }
+        if (kwIndices.length > 0) sequence.push({ entry: e, kwIndices });
       }
-      return jsonResponse(res, { file: abs, entries });
+
+      return jsonResponse(res, { perKeyword, sequence });
     } catch (err) {
       return jsonResponse(res, { error: err.message }, 500);
     }
@@ -1854,6 +2561,182 @@ const server = http.createServer(async (req, res) => {
       job.clients = job.clients.filter(c => c !== res);
     });
     return;
+  }
+
+  // GET /api/settings
+  if (req.method === "GET" && pathname === "/api/settings") {
+    const s = loadSettings();
+    // Never send the raw key to the browser — send a masked version
+    return jsonResponse(res, { ...s, openwebui_key: s.openwebui_key ? "••••••••" : "" });
+  }
+
+  // POST /api/settings
+  if (req.method === "POST" && pathname === "/api/settings") {
+    const body = await readBody(req);
+    let payload;
+    try { payload = JSON.parse(body); } catch { return jsonResponse(res, { error: "Invalid JSON" }, 400); }
+    // Don't overwrite the key if the browser sent back the masked placeholder
+    if (payload.openwebui_key === "••••••••") delete payload.openwebui_key;
+    const saved = saveSettings(payload);
+    return jsonResponse(res, { ok: true, openwebui_model: saved.openwebui_model, openwebui_url: saved.openwebui_url });
+  }
+
+  // GET /api/settings/models?url=...&key=...  — proxy model list from OpenWebUI
+  if (req.method === "GET" && pathname === "/api/settings/models") {
+    const owUrl = (reqUrl.searchParams.get("url") || "http://localhost:3000").replace(/\/$/, "");
+    const owKey = reqUrl.searchParams.get("key") || loadSettings().openwebui_key || "";
+    try {
+      const r = await fetch(owUrl + "/api/models", {
+        headers: owKey ? { "Authorization": "Bearer " + owKey } : {},
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      // OpenWebUI returns { data: [{id, name, ...}] } (OpenAI format)
+      const models = (data.data || data.models || []).map(m => ({ id: m.id, name: m.name || m.id }));
+      return jsonResponse(res, { models });
+    } catch (err) {
+      return jsonResponse(res, { error: err.message }, 502);
+    }
+  }
+
+  // GET /api/model-image — serve model.png from project root
+  if (req.method === "GET" && pathname === "/api/model-image") {
+    const modelPath = path.resolve(__dirname, "..", "model.png");
+    try {
+      const img = fs.readFileSync(modelPath);
+      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-cache" });
+      return res.end(img);
+    } catch {
+      res.writeHead(404);
+      return res.end("model.png not found");
+    }
+  }
+
+  // POST /api/fsm/analyze — extract FSM from image via Claude, scan log for violations
+  if (req.method === "POST" && pathname === "/api/fsm/analyze") {
+    const body = await readBody(req);
+    let payload;
+    try { payload = JSON.parse(body); } catch { return jsonResponse(res, { error: "Invalid JSON" }, 400); }
+
+    const { imageBase64, imageMime, logFile } = payload;
+    if (!imageBase64) return jsonResponse(res, { error: "Missing imageBase64" }, 400);
+    if (!logFile)     return jsonResponse(res, { error: "Missing logFile" }, 400);
+
+    const absLog = path.resolve(logFile.replace(/^~/, os.homedir()));
+
+    // 1. Extract FSM transitions from image via OpenWebUI vision API
+    let transitions;
+    try {
+      const settings = loadSettings();
+      const owUrl   = (settings.openwebui_url || "http://localhost:3000").replace(/\/$/, "");
+      const owKey   = settings.openwebui_key  || "";
+      const owModel = settings.openwebui_model || "";
+      if (!owModel) throw new Error("No model configured — set one in Settings.");
+
+      const prompt = "This is a Finite State Machine (FSM) diagram for an Android app lifecycle.\n"
+        + "Extract every state transition. For each transition identify:\n"
+        + "- from: the source state name (short identifier, no spaces)\n"
+        + "- to: the destination state name\n"
+        + "- method: the method name that triggers the transition (name only, no parentheses)\n\n"
+        + "Return ONLY a JSON object, no markdown, no code fences:\n"
+        + '{"transitions":[{"from":"StateName","to":"StateName","method":"methodName"}]}\n\n'
+        + "If a transition has no label, omit it. Include self-loops (state transitions to itself).";
+
+      const owRes = await fetch(owUrl + "/api/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(owKey ? { "Authorization": "Bearer " + owKey } : {}),
+        },
+        body: JSON.stringify({
+          model: owModel,
+          max_tokens: 2048,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: "data:" + (imageMime || "image/png") + ";base64," + imageBase64 } },
+              { type: "text", text: prompt },
+            ],
+          }],
+        }),
+      });
+      if (!owRes.ok) {
+        const errText = await owRes.text();
+        throw new Error("OpenWebUI error " + owRes.status + ": " + errText.slice(0, 200));
+      }
+      const owData = await owRes.json();
+      const raw = (owData.choices[0].message.content || "").trim();
+      const jsonStr = raw.replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
+      const parsed = JSON.parse(jsonStr);
+      transitions = parsed.transitions || [];
+    } catch (err) {
+      return jsonResponse(res, { error: "AI extraction failed: " + err.message }, 500);
+    }
+
+    if (!transitions.length) {
+      return jsonResponse(res, { error: "No transitions extracted from image" }, 422);
+    }
+
+    // 2. Parse log file
+    let entries;
+    try { entries = parseLogEntries(absLog); }
+    catch (err) { return jsonResponse(res, { error: "Log read failed: " + err.message }, 500); }
+
+    // 3. Match each transition's method against log entries (case-insensitive, methodName+( partial)
+    const queriesLow = transitions.map(t => (t.method + "(").toLowerCase());
+
+    const perKeyword = queriesLow.map((ql, i) => ({
+      query: transitions[i].method + "(",
+      count: entries.filter(e => entryMatchesQuery(e, ql)).length,
+    }));
+
+    // 4. Build ordered sequence of matching entries
+    const sequence = [];
+    for (const e of entries) {
+      const kwIndices = [];
+      for (let i = 0; i < queriesLow.length; i++) {
+        if (entryMatchesQuery(e, queriesLow[i])) kwIndices.push(i);
+      }
+      if (kwIndices.length > 0) sequence.push({ entry: e, kwIndices, violation: false });
+    }
+
+    // 5. Detect violations: a method appears when it shouldn't given observed prior states.
+    //    Simple rule: if a transition T requires being in state S, but the last observed
+    //    state-entering method doesn't correspond to any transition leading to S, flag it.
+    //    We do a lightweight check: find methods that appear *before* any of their
+    //    prerequisite transitions have been observed.
+    const violations = [];
+    const observedMethods = new Set();
+    for (let si = 0; si < sequence.length; si++) {
+      const row = sequence[si];
+      for (const kwIdx of row.kwIndices) {
+        const t = transitions[kwIdx];
+        // Check if the "from" state is reachable: at least one transition leading INTO t.from
+        // must have been observed already (unless t.from is a start/initial state)
+        const prereqs = transitions.filter(p => p.to === t.from);
+        const isInitial = prereqs.length === 0 || t.from === "[*]" || t.from.toLowerCase().includes("start");
+        if (!isInitial && prereqs.length > 0) {
+          const prereqSatisfied = prereqs.some(p => observedMethods.has(p.method.toLowerCase()));
+          if (!prereqSatisfied) {
+            row.violation = true;
+            violations.push({
+              type: "Out-of-order",
+              detail: t.method + "() called before reaching state '" + t.from + "' (expected: " +
+                prereqs.map(p => p.method + "()").join(" or ") + " first)",
+            });
+          }
+        }
+        observedMethods.add(t.method.toLowerCase());
+      }
+    }
+
+    return jsonResponse(res, {
+      transitions,
+      perKeyword,
+      sequence,
+      violations,
+      totalEntries: entries.length,
+    });
   }
 
   res.writeHead(404);

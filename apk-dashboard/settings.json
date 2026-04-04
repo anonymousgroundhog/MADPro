@@ -1,0 +1,5 @@
+{
+  "openwebui_url": "http://sushi.it.ilstu.edu:8080/",
+  "openwebui_key": "sk-a2834c3298cf4bab9cc02f403aee316c",
+  "openwebui_model": "gemma3:latest"
+}

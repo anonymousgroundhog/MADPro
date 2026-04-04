@@ -58,7 +58,20 @@
       "Bash(adb -s ZT4229DSNS shell am start -a android.intent.action.VIEW -d \"market://details?id=com.kiloo.subwaysurf\" com.android.vending)",
       "Bash(adb -s ZT4229DSNS shell uiautomator dump /sdcard/ui.xml)",
       "Bash(adb -s ZT4229DSNS pull /sdcard/ui.xml /tmp/ui.xml)",
-      "Bash(grep -n '\\\\$/' /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)"
+      "Bash(grep -n '\\\\$/' /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Bash(grep -n \"\\\\`\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Bash(awk 'NR>=176 && NR<=1793' /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Bash(grep -n \"\\\\`\")",
+      "Bash(grep -n \"\\\\`\\\\|\\\\\\\\\\\\\\\\'\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Bash(grep -n '\\\\${' /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Bash(grep -n '\\\\${')",
+      "Bash(pkill -f \"node.*server.js\")",
+      "Bash(curl -s http://127.0.0.1:3456/)",
+      "Read(//tmp/**)",
+      "Bash(sed -n '1455,1462p' /tmp/live.html)",
+      "Bash(kill %1)",
+      "Bash(grep:*)",
+      "WebFetch(domain:docs.openwebui.com)"
     ]
   }
 }

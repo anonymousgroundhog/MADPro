@@ -44,7 +44,21 @@
       "Bash(curl -s http://localhost:3457)",
       "Bash(apktool --version)",
       "Bash(ls /home/sean/Downloads/*.apk)",
-      "Bash(git check-ignore:*)"
+      "Bash(git check-ignore:*)",
+      "Bash(~/.cargo/bin/apkeep --help)",
+      "Bash(appium --version)",
+      "Bash(~/.npm-global/bin/appium --version)",
+      "Bash(npx appium:*)",
+      "Bash(curl -s http://127.0.0.1:4723/status)",
+      "Bash(curl -s http://127.0.0.1:4723/)",
+      "Bash(curl -s http://127.0.0.1:4723/appium/sessions)",
+      "Bash(curl -s -X POST http://127.0.0.1:4723/session -H \"Content-Type: application/json\" -d '{\"capabilities\":{\"firstMatch\":[{}]}}')",
+      "Bash(curl -sv http://127.0.0.1:4723/status)",
+      "Bash(curl -s http://127.0.0.1:4723/wd/hub/status)",
+      "Bash(adb -s ZT4229DSNS shell am start -a android.intent.action.VIEW -d \"market://details?id=com.kiloo.subwaysurf\" com.android.vending)",
+      "Bash(adb -s ZT4229DSNS shell uiautomator dump /sdcard/ui.xml)",
+      "Bash(adb -s ZT4229DSNS pull /sdcard/ui.xml /tmp/ui.xml)",
+      "Bash(grep -n '\\\\$/' /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)"
     ]
   }
 }

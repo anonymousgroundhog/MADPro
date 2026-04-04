@@ -103,8 +103,10 @@ function walkDir(dir) {
 }
 
 /**
- * Groups APKs by their parent directory (split-APK aware).
- * Returns one AppEntry per logical app.
+ * Groups APKs by their immediate parent directory (split-APK aware).
+ * Every directory that directly contains at least one APK is treated as
+ * one logical app — regardless of how many levels deep it sits.
+ * APKs sitting directly in baseDir (depth 0) each become their own app.
  */
 function groupApks(baseDir) {
   const allApks = walkDir(baseDir);
@@ -119,26 +121,31 @@ function groupApks(baseDir) {
   const entries = [];
   for (const [dir, apks] of byDir) {
     const sorted = apks.slice().sort();
-    const relDir = path.relative(baseDir, dir) || ".";
+    const isBaseDir = path.resolve(dir) === path.resolve(baseDir);
 
-    // If this directory looks like a split-APK bundle (contains base.apk, or all files
-    // share the same package name prefix), treat it as one app.
+    // Detect split-APK bundle: a directory containing base.apk, or multiple APKs
+    // where at least one is named base.apk or *.apk (config split naming).
     const hasBase = sorted.some((p) => path.basename(p).toLowerCase() === "base.apk");
+    const hasSplits = sorted.length > 1 && sorted.some((p) =>
+      /^(config\.|split_config\.)/.test(path.basename(p).toLowerCase())
+    );
+    const isSplitBundle = hasBase || hasSplits;
 
-    if (relDir !== ".") {
-      // Subdirectory — treat all APKs as one app (split APK bundle).
-      // Primary: prefer base.apk, then the largest file (most likely the main APK).
+    if (!isBaseDir && isSplitBundle) {
+      // Split-APK bundle — all APKs in this dir belong to one app
       const primary =
         sorted.find((p) => path.basename(p).toLowerCase() === "base.apk") ||
         sorted.reduce((best, p) => {
           try { return fs.statSync(p).size > fs.statSync(best).size ? p : best; } catch { return best; }
         }, sorted[0]);
-      const label = relDir.replace(/\\/g, "/");
-      entries.push({ dir, apks: sorted, primary, label });
+      const relDir = path.relative(baseDir, dir).replace(/\\/g, "/");
+      entries.push({ dir, apks: sorted, primary, label: relDir });
     } else {
-      // Root directory — every APK file is its own independent app
+      // Either the base dir, or a subdirectory with flat (non-bundle) APKs —
+      // every APK file is its own independent app.
       for (const apkPath of sorted) {
-        const label = path.basename(apkPath, ".apk");
+        const relPath = path.relative(baseDir, apkPath).replace(/\\/g, "/");
+        const label = relPath.replace(/\.apk$/i, "");
         entries.push({ dir, apks: [apkPath], primary: apkPath, label });
       }
     }

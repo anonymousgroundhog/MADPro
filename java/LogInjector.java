@@ -5,6 +5,7 @@ import soot.util.Chain;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Arrays;
 
 /**
  * Soot transformer that injects Log.d("SootInjection", "Entering method: <sig>")
@@ -114,11 +115,24 @@ public class LogInjector {
         Options.v().set_src_prec(Options.src_prec_apk);
         Options.v().set_output_format(Options.output_format_dex);
         Options.v().set_android_jars(androidPlatforms);
-        Options.v().set_full_resolver(true);
+        // Don't force-resolve every reachable class — massively reduces heap use
+        Options.v().set_full_resolver(false);
         Options.v().set_no_bodies_for_excluded(true);
         Options.v().set_ignore_resolution_errors(true);
         // Single-threaded: avoids ConcurrentModificationException on Chain<Unit>
         Options.v().set_num_threads(1);
+
+        // Exclude Android/Java framework and common library packages from body loading.
+        // Soot still resolves their signatures (phantom refs) but won't JImplify them,
+        // which is the main source of heap exhaustion on large APKs.
+        List<String> excludes = new ArrayList<>(Arrays.asList(
+            "java.", "javax.", "sun.", "android.", "androidx.",
+            "com.google.android.", "com.android.",
+            "kotlin.", "kotlinx.",
+            "org.apache.", "org.xml.", "org.json.", "org.w3c.",
+            "junit.", "dalvik."
+        ));
+        Options.v().set_exclude(excludes);
 
         List<String> processDirs = new ArrayList<>();
         processDirs.add(apkInput);

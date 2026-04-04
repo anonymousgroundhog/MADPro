@@ -72,6 +72,24 @@ def is_appium_server_running() -> bool:
     return False
 
 
+def _appium_base_url() -> str:
+    """
+    Returns the correct WebDriver base URL for the running Appium server.
+    Appium 1.x (including Appium Desktop) uses /wd/hub.
+    Appium 2.x+ uses the root /.
+    """
+    import urllib.request
+    # Try Appium 2.x root endpoint first
+    try:
+        urllib.request.urlopen(
+            f"http://127.0.0.1:{_appium_port}/status", timeout=2)
+        return f"http://127.0.0.1:{_appium_port}"
+    except Exception:
+        pass
+    # Fall back to Appium 1.x /wd/hub
+    return f"http://127.0.0.1:{_appium_port}/wd/hub"
+
+
 def is_appium_available() -> bool:
     """True if appium CLI is on PATH/known dirs OR server is already running."""
     return _find_appium_cli() is not None or is_appium_server_running()
@@ -215,17 +233,13 @@ def start_appium_server(
 
     threading.Thread(target=_drain, daemon=True).start()
 
-    # Wait up to 10 s for the server to be ready
+    # Wait up to 10 s for the server to be ready (check both 1.x and 2.x paths)
     deadline = time.time() + 10
     while time.time() < deadline:
-        try:
-            import urllib.request
-            urllib.request.urlopen(
-                f"http://127.0.0.1:{_appium_port}/status", timeout=2)
+        if is_appium_server_running():
             log("Appium server ready.")
             return True
-        except Exception:
-            time.sleep(0.5)
+        time.sleep(0.5)
 
     log("WARNING: Appium server did not respond in time — proceeding anyway.")
     return True
@@ -272,46 +286,91 @@ def _get_device_serial(serial: str | None = None) -> str | None:
     return (emu or devices[0])["serial"]
 
 
-def _pull_apk(serial: str, package: str, output_dir: str,
-              on_output: Callable[[str], None] | None = None) -> str | None:
+def _find_adb() -> str:
+    """Returns path to adb, checking SDK platform-tools before PATH."""
+    import shutil
+    home = os.path.expanduser("~")
+    sdk_roots = [
+        os.environ.get("ANDROID_HOME", ""),
+        os.environ.get("ANDROID_SDK_ROOT", ""),
+        os.path.join(home, "Android", "Sdk"),
+        os.path.join(home, "android-sdk"),
+        "/opt/android-sdk",
+    ]
+    for root in sdk_roots:
+        if not root:
+            continue
+        candidate = os.path.join(root, "platform-tools", "adb")
+        if os.path.isfile(candidate):
+            return candidate
+    return shutil.which("adb") or "adb"
+
+
+def _pull_apks(serial: str, package: str, output_dir: str,
+               on_output: Callable[[str], None] | None = None) -> list[str]:
     """
-    Finds the installed APK path via pm path, pulls it with adb, and
-    returns the local file path, or None on failure.
+    Pulls ALL APK files for a package (base APK + all split/library APKs)
+    using `pm path --user 0` which lists every installed path.
+
+    Returns a list of successfully pulled local file paths.
     """
     def log(msg):
         if on_output:
             on_output(msg)
 
-    try:
-        r = subprocess.run(
-            ["adb", "-s", serial, "shell", "pm", "path", package],
-            capture_output=True, text=True, timeout=15,
-        )
-        # output: "package:/data/app/…/base.apk"
-        match = re.search(r"package:(.+\.apk)", r.stdout)
-        if not match:
-            log(f"  Could not locate APK for {package} on device.")
-            return None
-        device_path = match.group(1).strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        log(f"  adb pm path failed: {e}")
-        return None
+    adb = _find_adb()
+
+    # `pm path --user 0 <pkg>` returns one line per APK:
+    #   package:/data/app/.../base.apk
+    #   package:/data/app/.../split_config.arm64_v8a.apk
+    #   …
+    # Fall back to plain `pm path` if --user 0 isn't supported.
+    device_paths = []
+    for pm_args in [["pm", "path", "--user", "0", package],
+                    ["pm", "path", package]]:
+        try:
+            r = subprocess.run(
+                [adb, "-s", serial, "shell"] + pm_args,
+                capture_output=True, text=True, timeout=15,
+            )
+            paths = re.findall(r"package:(.+\.apk)", r.stdout)
+            if paths:
+                device_paths = [p.strip() for p in paths]
+                break
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            log(f"  adb pm path failed: {e}")
+            return []
+
+    if not device_paths:
+        log(f"  Could not locate any APK for {package} on device.")
+        return []
 
     os.makedirs(output_dir, exist_ok=True)
-    local_path = os.path.join(output_dir, f"{package}.apk")
-    log(f"  Pulling {device_path} → {local_path}")
-    try:
-        r = subprocess.run(
-            ["adb", "-s", serial, "pull", device_path, local_path],
-            capture_output=True, text=True, timeout=120,
-        )
-        if r.returncode != 0:
-            log(f"  adb pull failed: {r.stderr.strip()}")
-            return None
-        return local_path
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        log(f"  adb pull error: {e}")
-        return None
+    log(f"  Found {len(device_paths)} APK file(s) for {package}")
+
+    pulled = []
+    for device_path in device_paths:
+        filename = os.path.basename(device_path)
+        local_path = os.path.join(output_dir, filename)
+        log(f"  Pulling {filename} → {output_dir}/")
+        try:
+            r = subprocess.run(
+                [adb, "-s", serial, "pull", device_path, local_path],
+                capture_output=True, text=True, timeout=120,
+            )
+            if r.returncode == 0:
+                pulled.append(local_path)
+            else:
+                log(f"  [WARN] pull failed for {filename}: {r.stderr.strip()}")
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            log(f"  [WARN] pull error for {filename}: {e}")
+
+    if pulled:
+        log(f"  [OK] Pulled {len(pulled)}/{len(device_paths)} file(s) to {output_dir}")
+    else:
+        log(f"  [FAILED] No files pulled for {package}")
+
+    return pulled
 
 
 def download_via_appium(
@@ -332,11 +391,9 @@ def download_via_appium(
     Returns list of successfully pulled local APK paths.
     """
     from appium import webdriver
-    from appium.options import AppiumOptions
+    from appium.options.android.uiautomator2.base import UiAutomator2Options
     from appium.webdriver.common.appiumby import AppiumBy
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException, NoSuchElementException
+    from selenium.common.exceptions import NoSuchElementException
 
     def log(msg):
         if on_output:
@@ -349,22 +406,22 @@ def download_via_appium(
 
     log(f"Connecting to device {serial}...")
 
-    options = AppiumOptions()
-    options.platform_name = "Android"
-    options.automation_name = "UiAutomator2"
+    options = UiAutomator2Options()
     options.udid = serial
     options.no_reset = True
-    options.load_capabilities({
-        "appPackage": _PLAY_STORE_PKG,
-        "appActivity": _PLAY_STORE_ACTIVITY,
-        "autoGrantPermissions": True,
-        "newCommandTimeout": 120,
-    })
+    # Don't set app_package/app_activity — Appium tries to force-stop and
+    # relaunch the app, which fails on physical devices with "multiple activities".
+    # Instead we connect to the device generically and use deepLink to navigate.
+    options.auto_grant_permissions = True
+    options.new_command_timeout = 120
+
+    base_url = _appium_base_url()
+    log(f"Connecting to Appium at {base_url}...")
 
     global _active_driver
     try:
         driver = webdriver.Remote(
-            f"http://127.0.0.1:{_appium_port}",
+            base_url,
             options=options,
         )
         _active_driver = driver
@@ -372,19 +429,75 @@ def download_via_appium(
         log(f"ERROR: Could not connect to Appium: {e}")
         return []
 
-    def _wait_for(xpath: str, timeout: int) -> object | None:
-        """Polls for an element, checking stop_event every second. Returns element or None."""
+    def _find_by_uia(selector: str, timeout: int) -> object | None:
+        """
+        Finds an element using UiAutomator2 selector string.
+        Polls every second up to timeout seconds.
+        UiSelector can match on text(), textContains(), description(), etc.
+        and can traverse the hierarchy with childSelector / fromParent.
+        """
         deadline = time.time() + timeout
         while time.time() < deadline:
             if stop_event and stop_event.is_set():
                 return None
             try:
-                el = driver.find_element(AppiumBy.XPATH, xpath)
+                el = driver.find_element(AppiumBy.ANDROID_UIAUTOMATOR, selector)
                 return el
             except NoSuchElementException:
                 time.sleep(1)
         return None
 
+    def _find_install_btn(timeout: int) -> object | None:
+        """
+        Finds the tappable Install/Update element on the Play Store app page.
+        Play Store renders 'Install' as a TextView inside a clickable FrameLayout,
+        so @text on Button won't work. We use several strategies in order:
+          1. UiAutomator: clickable container whose child has text 'Install'/'Update'
+          2. Broad text match across all clickable views
+          3. resource-id fallback
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if stop_event and stop_event.is_set():
+                return None
+            for selector in [
+                # Strategy 1: clickable view containing a child with Install/Update text
+                'new UiSelector().clickable(true).childSelector(new UiSelector().textMatches("(?i)install|update"))',
+                # Strategy 2: any element (including TextView) with matching text that IS clickable
+                'new UiSelector().textMatches("(?i)install|update").clickable(true)',
+                # Strategy 3: description match
+                'new UiSelector().descriptionMatches("(?i)install|update")',
+            ]:
+                try:
+                    el = driver.find_element(AppiumBy.ANDROID_UIAUTOMATOR, selector)
+                    return el
+                except NoSuchElementException:
+                    pass
+            time.sleep(1)
+        return None
+
+    def _find_done_btn(timeout: int) -> object | None:
+        """Finds Open/Uninstall after install completes."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if stop_event and stop_event.is_set():
+                return None
+            for selector in [
+                'new UiSelector().clickable(true).childSelector(new UiSelector().textMatches("(?i)^open$|^uninstall$"))',
+                'new UiSelector().textMatches("(?i)^open$|^uninstall$").clickable(true)',
+                'new UiSelector().descriptionMatches("(?i)^open$|^uninstall$")',
+            ]:
+                try:
+                    el = driver.find_element(AppiumBy.ANDROID_UIAUTOMATOR, selector)
+                    return el
+                except NoSuchElementException:
+                    pass
+            time.sleep(1)
+        return None
+
+    # pulled_packages: list of package names successfully downloaded (not individual files)
+    pulled_packages: list[str] = []
+    # pulled: flat list of all local APK file paths (base + splits)
     pulled: list[str] = []
 
     try:
@@ -392,6 +505,14 @@ def download_via_appium(
             if stop_event and stop_event.is_set():
                 log("Cancelled.")
                 break
+
+            # Skip if already downloaded to the output directory
+            pkg_dir = os.path.join(output_dir, package)
+            if os.path.isdir(pkg_dir) and any(
+                f.endswith(".apk") for f in os.listdir(pkg_dir)
+            ):
+                log(f"[{package}] Already exists in {pkg_dir} — skipping.")
+                continue
 
             log(f"[{package}] Opening Play Store...")
             try:
@@ -401,55 +522,63 @@ def download_via_appium(
                      "package": _PLAY_STORE_PKG},
                 )
 
-                # Wait up to 10s for page to load
-                for _ in range(10):
-                    if stop_event and stop_event.is_set():
-                        break
-                    time.sleep(1)
+                # Wait for page to settle
+                time.sleep(4)
 
                 if stop_event and stop_event.is_set():
                     log("Cancelled.")
                     break
 
-                # Check for Install / Update button
-                install_btn = _wait_for(
-                    '//android.widget.Button[@text="Install" or @text="Update"]',
-                    timeout=15,
+                # Check if already installed on device (Open button present)
+                already_on_device = _find_by_uia(
+                    'new UiSelector().clickable(true).childSelector(new UiSelector().textMatches("(?i)^open$"))',
+                    timeout=3,
                 )
-
-                if stop_event and stop_event.is_set():
-                    log("Cancelled.")
-                    break
-
-                if install_btn:
-                    log(f"[{package}] Tapping Install...")
-                    install_btn.click()
-                    log(f"[{package}] Waiting for installation (up to 3 min)...")
-                    open_btn = _wait_for(
-                        '//android.widget.Button[@text="Open" or @text="Uninstall"]',
-                        timeout=180,
-                    )
+                if already_on_device:
+                    log(f"[{package}] Already installed on device — pulling APKs...")
+                else:
+                    install_btn = _find_install_btn(timeout=15)
                     if stop_event and stop_event.is_set():
                         log("Cancelled.")
                         break
-                    if not open_btn:
+
+                    if not install_btn:
+                        log(f"[{package}] WARNING: Could not find Install/Update button — skipping.")
+                        continue
+
+                    log(f"[{package}] Tapping Install...")
+                    install_btn.click()
+                    log(f"[{package}] Waiting for installation (up to 3 min)...")
+
+                    done = _find_done_btn(timeout=180)
+                    if stop_event and stop_event.is_set():
+                        log("Cancelled.")
+                        break
+                    if not done:
                         log(f"[{package}] WARNING: Install timed out — skipping.")
                         continue
                     log(f"[{package}] Installed.")
-                else:
-                    # Check if already installed
-                    open_btn = _wait_for(
-                        '//android.widget.Button[@text="Open"]', timeout=5)
-                    if open_btn:
-                        log(f"[{package}] Already installed.")
-                    else:
-                        log(f"[{package}] WARNING: Could not find Install/Open — skipping.")
-                        continue
 
-                path = _pull_apk(serial, package, output_dir, on_output)
-                if path:
-                    pulled.append(path)
-                    log(f"[{package}] Saved to {path}")
+                # Pull all APKs (base + splits/libs)
+                paths = _pull_apks(serial, package, pkg_dir, on_output)
+                if not paths:
+                    log(f"[{package}] WARNING: Pull failed — not counting as downloaded.")
+                else:
+                    pulled.extend(paths)
+                    pulled_packages.append(package)
+                    log(f"[{package}] Saved {len(paths)} file(s) to {pkg_dir}")
+
+                # Uninstall from device after pulling to free space
+                log(f"[{package}] Uninstalling from device...")
+                try:
+                    adb = _find_adb()
+                    subprocess.run(
+                        [adb, "-s", serial, "uninstall", package],
+                        capture_output=True, timeout=30,
+                    )
+                    log(f"[{package}] Uninstalled.")
+                except Exception as e_uninstall:
+                    log(f"[{package}] WARNING: Uninstall failed: {e_uninstall}")
 
             except Exception as e:
                 if stop_event and stop_event.is_set():
@@ -466,4 +595,5 @@ def download_via_appium(
             pass
         log("Appium session closed.")
 
-    return pulled
+    # Return package names (not individual file paths) so callers can count apps
+    return pulled_packages

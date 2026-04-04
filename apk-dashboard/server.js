@@ -11,6 +11,7 @@ const { scanApks } = require("./scanner");
 const { lookupPlayStore, clearCache } = require("./playstore");
 const { inspectApk } = require("./apk_inspector");
 const puppeteer = require("puppeteer");
+const toolsApi = require("./tools-api");
 
 // ── CLI args ────────────────────────────────────────────────────────────────
 
@@ -177,7 +178,7 @@ function renderHtml() {
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>APK Kanban Dashboard</title>
+<title>MADPro</title>
 <style>
   :root {
     --bg: #0f1117;
@@ -244,6 +245,61 @@ function renderHtml() {
   .status-bar.done .status-dot { background: var(--accent-no-ads); }
   .status-bar.error .status-dot { background: var(--accent-ads); }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  /* ── Tab navigation ── */
+  .tab-nav { display: flex; gap: 4px; padding: 12px 24px 0; border-bottom: 1px solid var(--card-border); background: var(--bg); }
+  .tab-btn {
+    background: transparent; border: 1px solid transparent; color: var(--text-muted);
+    padding: 7px 18px; border-radius: 6px 6px 0 0; font-size: .88rem; font-weight: 600;
+    cursor: pointer; border-bottom: none; transition: color .15s, background .15s;
+    margin-bottom: -1px;
+  }
+  .tab-btn:hover { color: var(--text); background: var(--surface); }
+  .tab-btn.active { color: var(--text); background: var(--surface); border-color: var(--card-border); border-bottom-color: var(--surface); }
+
+  /* ── Tools tab layout ── */
+  .tools-statusbar { background: var(--surface); border: 1px solid var(--card-border); border-radius: 6px; padding: 7px 14px; font-size: .8rem; margin-bottom: 16px; color: var(--text-muted); }
+  .tools-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
+  @media(max-width:1000px){ .tools-grid{ grid-template-columns: 1fr 1fr; } }
+  @media(max-width:640px){ .tools-grid{ grid-template-columns: 1fr; } }
+  .tools-panel { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--radius); overflow: hidden; }
+  .tools-panel-header { padding: 11px 16px; font-weight: 700; font-size: .9rem; background: rgba(255,255,255,.03); border-bottom: 1px solid var(--card-border); }
+  .tools-panel-body { padding: 14px 16px; }
+  .tools-label { font-size: .75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; display: block; margin-bottom: 4px; }
+  .tools-hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-muted); font-size: .72rem; }
+  .tools-input {
+    background: var(--card-bg); border: 1px solid var(--card-border); color: var(--text);
+    padding: 7px 10px; border-radius: 6px; font-size: .85rem; width: 100%;
+  }
+  .tools-input:focus { outline: 2px solid var(--accent-no-ads); }
+  .tools-btn-sm {
+    background: var(--card-bg); color: var(--text-muted); border: 1px solid var(--card-border);
+    padding: 6px 11px; border-radius: 5px; font-size: .78rem; cursor: pointer; white-space: nowrap;
+    transition: background .12s;
+  }
+  .tools-btn-sm:hover { background: #2a2f4a; color: var(--text); }
+  .tools-btn-primary { background: var(--accent-no-ads); color: #fff; border: none; padding: 8px 16px; border-radius: 6px; font-size: .85rem; font-weight: 700; cursor: pointer; transition: opacity .15s; }
+  .tools-btn-primary:hover { opacity: .85; }
+  .tools-btn-primary:disabled { opacity: .4; cursor: default; }
+  .tools-btn-secondary { background: var(--card-bg); color: var(--text-link); border: 1px solid var(--card-border); padding: 8px 14px; border-radius: 6px; font-size: .85rem; font-weight: 600; cursor: pointer; }
+  .tools-btn-secondary:hover { background: #2a2f4a; }
+  .tools-btn-danger { background: #7f1d1d; color: #fff; border: none; padding: 8px 14px; border-radius: 6px; font-size: .85rem; font-weight: 600; cursor: pointer; }
+  .tools-btn-danger:hover { background: #991b1b; }
+  .tools-btn-danger:disabled { opacity: .4; cursor: default; }
+  .tools-statusrow { font-size: .78rem; color: var(--text-muted); padding: 4px 0; }
+  .tools-statusrow.ok { color: var(--accent-no-ads); }
+  .tools-statusrow.warn { color: #f5a623; }
+  .tools-statusrow.err { color: var(--accent-ads); }
+  .radio-opt { font-size: .85rem; display: flex; align-items: center; gap: 5px; cursor: pointer; color: var(--text); }
+  .cat-checklist { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; max-height: 200px; overflow-y: auto; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 8px; }
+  .cat-checklist label { font-size: .78rem; color: var(--text); display: flex; align-items: center; gap: 5px; cursor: pointer; padding: 2px 0; }
+  .tools-log-wrap { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 14px 16px; }
+  .tools-log { background: #0a0c14; border: 1px solid var(--card-border); border-radius: 6px; padding: 10px 12px; height: 280px; overflow-y: auto; font-family: monospace; font-size: .78rem; line-height: 1.55; }
+  .log-ok   { color: #4ade80; }
+  .log-err  { color: #f87171; }
+  .log-warn { color: #facc15; }
+  .log-hdr  { color: #7eb6ff; }
+  .log-def  { color: #c8ccd8; }
 
   /* ── Search / Toolbar ── */
   .toolbar { padding: 16px 24px 0; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -405,7 +461,7 @@ function renderHtml() {
 <body>
 
 <header>
-  <h1>APK <span>Kanban</span> Dashboard</h1>
+  <h1>🛡️ MAD<span>Pro</span></h1>
   <div class="dir-row">
     <input id="dirInput" type="text" placeholder="Select or type a directory path…" value="" />
     <button class="btn-browse" onclick="openBrowser()">Browse…</button>
@@ -423,6 +479,15 @@ function renderHtml() {
   <button class="btn-export" id="btnExport" onclick="openExport()">⬇ Export PDF</button>
 </div>
 
+<!-- ── Tab navigation ── -->
+<div class="tab-nav">
+  <button class="tab-btn active" id="tabBtnKanban" onclick="switchTab('kanban')">📋 Kanban Board</button>
+  <button class="tab-btn" id="tabBtnTools" onclick="switchTab('tools')">🔧 Tools</button>
+  <button class="tab-btn" id="tabBtnLogs" onclick="switchTab('logs')">🔍 Log Viewer</button>
+</div>
+
+<!-- ── Kanban tab content ── -->
+<div id="tabKanban">
 <div class="board">
   <div class="column">
     <div class="col-header ads">
@@ -439,6 +504,148 @@ function renderHtml() {
     <div class="cards" id="colNoAds"><div class="empty">No apps yet.</div></div>
   </div>
 </div>
+</div>
+
+<!-- ── Tools tab content ── -->
+<div id="tabTools" style="display:none; padding:20px 24px; display:none;">
+
+  <!-- Tool status bar -->
+  <div class="tools-statusbar" id="toolsStatusBar">Checking tools…</div>
+
+  <!-- Three-panel layout -->
+  <div class="tools-grid">
+
+    <!-- ── Panel 1: Download APKs ── -->
+    <div class="tools-panel">
+      <div class="tools-panel-header">⬇ Download APKs</div>
+      <div class="tools-panel-body">
+
+        <label class="tools-label">Source</label>
+        <div style="display:flex;gap:10px;margin-bottom:10px;">
+          <label class="radio-opt"><input type="radio" name="dlBackend" value="apkpure" checked onchange="onBackendChange(this)"> ApkPure <span class="tools-hint">(no auth)</span></label>
+          <label class="radio-opt"><input type="radio" name="dlBackend" value="google-play" onchange="onBackendChange(this)"> Google Play <span class="tools-hint">(via Appium, device must be signed in)</span></label>
+        </div>
+        <div id="dlBackendWarn" class="tools-statusrow err" style="display:none;margin-bottom:8px;"></div>
+
+        <label class="tools-label">Apps per category</label>
+        <input type="number" id="dlCount" value="5" min="1" max="50" class="tools-input" style="width:80px;margin-bottom:10px;" />
+
+        <label class="tools-label">Output directory</label>
+        <div style="display:flex;gap:6px;margin-bottom:10px;">
+          <input type="text" id="dlOutputDir" class="tools-input" style="flex:1;" placeholder="~/MADPro_Downloads" />
+          <button class="tools-btn-sm" onclick="browseForTools('dlOutputDir')">Browse…</button>
+        </div>
+
+        <label class="tools-label">Categories</label>
+        <div style="display:flex;gap:6px;margin-bottom:6px;">
+          <button class="tools-btn-sm" onclick="selectAllCats(true)">All</button>
+          <button class="tools-btn-sm" onclick="selectAllCats(false)">None</button>
+        </div>
+        <div class="cat-checklist" id="catChecklist"></div>
+
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <button class="tools-btn-primary" id="btnStartDownload" onclick="startDownload()">Start Download</button>
+          <button class="tools-btn-danger" id="btnCancelDownload" onclick="cancelCurrentJob('download')" disabled>Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Panel 2: Log Injection ── -->
+    <div class="tools-panel">
+      <div class="tools-panel-header">💉 Log Injection</div>
+      <div class="tools-panel-body">
+
+        <div class="tools-statusrow" id="injectorStatus">Injector: checking…</div>
+
+        <label class="tools-label" style="margin-top:10px;">APK directory</label>
+        <div style="display:flex;gap:6px;margin-bottom:10px;">
+          <input type="text" id="injectApkDir" class="tools-input" style="flex:1;" placeholder="/path/to/apks" />
+          <button class="tools-btn-sm" onclick="browseForTools('injectApkDir')">Browse…</button>
+        </div>
+
+        <label class="tools-label">Output directory</label>
+        <div style="display:flex;gap:6px;margin-bottom:10px;">
+          <input type="text" id="injectOutputDir" class="tools-input" style="flex:1;" placeholder="~/MADPro_Output" />
+          <button class="tools-btn-sm" onclick="browseForTools('injectOutputDir')">Browse…</button>
+        </div>
+
+        <label class="tools-label">Class patterns <span class="tools-hint">(comma-separated, e.g. MainActivity, *Login*)</span></label>
+        <input type="text" id="injectPatterns" class="tools-input" style="width:100%;margin-bottom:10px;" placeholder="MainActivity, *Activity, com.example.*" />
+
+        <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;">
+          <button class="tools-btn-secondary" onclick="compileInjector()">Compile LogInjector</button>
+          <button class="tools-btn-primary" id="btnStartInject" onclick="startInjection()">Inject Selected</button>
+          <button class="tools-btn-danger" id="btnCancelInject" onclick="cancelCurrentJob('inject')" disabled>Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Panel 3: Instrument / ADB ── -->
+    <div class="tools-panel">
+      <div class="tools-panel-header">📱 Instrument APK</div>
+      <div class="tools-panel-body">
+
+        <label class="tools-label">Device</label>
+        <div style="display:flex;gap:6px;margin-bottom:4px;">
+          <select id="deviceSelect" class="tools-input" style="flex:1;"></select>
+          <button class="tools-btn-sm" onclick="refreshDevices()">⟳</button>
+        </div>
+        <div class="tools-statusrow" id="deviceStatus" style="margin-bottom:10px;">No devices found</div>
+
+        <label class="tools-label">APK directory <span class="tools-hint">(folder containing app subdirs with split APKs)</span></label>
+        <div style="display:flex;gap:6px;margin-bottom:10px;">
+          <input type="text" id="instrumentApkDir" class="tools-input" style="flex:1;" placeholder="/path/to/apk-output-dir" />
+          <button class="tools-btn-sm" onclick="browseForTools('instrumentApkDir')">Browse…</button>
+        </div>
+
+        <label class="tools-label">Logcat output directory <span class="tools-hint">(one .log file per app)</span></label>
+        <div style="display:flex;gap:6px;margin-bottom:10px;">
+          <input type="text" id="instrumentLogDir" class="tools-input" style="flex:1;" placeholder="~/MADPro_Logcat" />
+          <button class="tools-btn-sm" onclick="browseForTools('instrumentLogDir')">Browse…</button>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:4px;">
+          <button class="tools-btn-primary" id="btnStartInstrument" onclick="startInstrumentation()">Install &amp; Launch All</button>
+          <button class="tools-btn-danger" id="btnCancelInstrument" onclick="cancelCurrentJob('instrument')" disabled>Cancel</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /tools-grid -->
+
+  <!-- Shared log output -->
+  <div class="tools-log-wrap">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <span style="font-weight:700;font-size:.9rem;color:var(--accent-no-ads);">Output Log</span>
+      <button class="tools-btn-sm" onclick="clearToolsLog()">Clear</button>
+    </div>
+    <div class="tools-log" id="toolsLog"></div>
+  </div>
+
+</div><!-- /tabTools -->
+
+<!-- ── Log Viewer tab content ── -->
+<div id="tabLogs" style="display:none; padding:20px 24px;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:260px;">
+      <input type="text" id="logDirInput" class="tools-input" style="flex:1;" placeholder="~/MADPro_Logcat" />
+      <button class="tools-btn-sm" onclick="browseForTools('logDirInput')">Browse…</button>
+      <button class="tools-btn-sm" onclick="refreshLogFileList()">Load</button>
+    </div>
+    <select id="logFileSelect" class="tools-input" style="min-width:220px;max-width:340px;" onchange="loadLogFile()">
+      <option value="">— select a log file —</option>
+    </select>
+    <button class="tools-btn-sm" onclick="loadLogFile()">Refresh</button>
+    <button class="tools-btn-sm" onclick="clearLogViewer()">Clear</button>
+  </div>
+  <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:8px;" id="logViewerMeta"></div>
+  <div id="logViewerOutput" style="
+    background:var(--card-bg); border:1px solid var(--card-border); border-radius:8px;
+    padding:14px 16px; font-family:monospace; font-size:.78rem; line-height:1.6;
+    white-space:pre-wrap; word-break:break-all; max-height:65vh; overflow-y:auto;
+    color:var(--text);
+  ">Select a log directory and file above.</div>
+</div><!-- /tabLogs -->
 
 <!-- Export PDF Modal -->
 <div class="modal-overlay" id="exportModal" onclick="handleExportOverlayClick(event)">
@@ -476,6 +683,31 @@ function renderHtml() {
     <div class="modal-footer">
       <button class="btn-cancel" onclick="closeSaveBrowser()">Cancel</button>
       <button class="btn-select" onclick="selectSaveDir()">Save Here</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tools Dir Browser Modal -->
+<div class="modal-overlay" id="toolsBrowserModal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal">
+    <div class="modal-header"><h2>Select Directory</h2><button class="modal-close" onclick="document.getElementById('toolsBrowserModal').classList.remove('open')">×</button></div>
+    <div class="modal-path" id="toolsBrowserPath"></div>
+    <div class="dir-list" id="toolsDirList"></div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="document.getElementById('toolsBrowserModal').classList.remove('open')">Cancel</button>
+      <button class="btn-select" onclick="selectToolsDir()">Select This Folder</button>
+    </div>
+  </div>
+</div>
+
+<!-- APK File Browser Modal -->
+<div class="modal-overlay" id="toolsApkBrowserModal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal">
+    <div class="modal-header"><h2>Select APK File</h2><button class="modal-close" onclick="document.getElementById('toolsApkBrowserModal').classList.remove('open')">×</button></div>
+    <div class="modal-path" id="apkBrowserPath"></div>
+    <div class="dir-list" id="apkDirList"></div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="document.getElementById('toolsApkBrowserModal').classList.remove('open')">Cancel</button>
     </div>
   </div>
 </div>
@@ -901,6 +1133,421 @@ async function doExport() {
   }
 }
 
+// ── Tab switching ────────────────────────────────────────────────────────────
+
+function switchTab(name) {
+  document.getElementById('tabKanban').style.display = name === 'kanban' ? '' : 'none';
+  document.getElementById('tabTools').style.display  = name === 'tools'  ? '' : 'none';
+  document.getElementById('tabLogs').style.display   = name === 'logs'   ? '' : 'none';
+  document.getElementById('tabBtnKanban').classList.toggle('active', name === 'kanban');
+  document.getElementById('tabBtnTools').classList.toggle('active', name === 'tools');
+  document.getElementById('tabBtnLogs').classList.toggle('active', name === 'logs');
+  if (name === 'tools') initToolsTab();
+  if (name === 'logs') initLogsTab();
+}
+
+// ── Tools tab ────────────────────────────────────────────────────────────────
+
+const CATEGORIES_LIST = [
+  ['GAME_ACTION','Action'],['GAME_CASUAL','Casual'],['GAME_PUZZLE','Puzzle'],
+  ['GAME_ROLE_PLAYING','Role Playing'],['SOCIAL','Social'],['COMMUNICATION','Communication'],
+  ['PRODUCTIVITY','Productivity'],['ENTERTAINMENT','Entertainment'],['FINANCE','Finance'],
+  ['HEALTH_AND_FITNESS','Health & Fitness'],['EDUCATION','Education'],
+  ['MUSIC_AND_AUDIO','Music & Audio'],['NEWS_AND_MAGAZINES','News & Magazines'],
+  ['SHOPPING','Shopping'],['TRAVEL_AND_LOCAL','Travel & Local'],['TOOLS','Tools'],
+  ['PHOTOGRAPHY','Photography'],['BUSINESS','Business'],['MEDICAL','Medical'],
+  ['MAPS_AND_NAVIGATION','Maps & Navigation'],
+];
+
+let toolsInited = false;
+let currentJobs = { download: null, inject: null, instrument: null };
+let toolsBrowseTarget = null;
+
+function initToolsTab() {
+  if (toolsInited) return;
+  toolsInited = true;
+
+  // Build category checklist
+  const list = document.getElementById('catChecklist');
+  list.innerHTML = CATEGORIES_LIST.map(([id, name]) =>
+    '<label><input type="checkbox" class="cat-cb" value="' + id + '" /> ' + escHtml(name) + '</label>'
+  ).join('');
+
+  // Set default dirs (home dir injected by server)
+  document.getElementById('dlOutputDir').placeholder   = ${JSON.stringify(os.homedir() + "/MADPro_Downloads")};
+  document.getElementById('injectOutputDir').placeholder = ${JSON.stringify(os.homedir() + "/MADPro_Output")};
+
+  refreshToolsStatus();
+}
+
+async function refreshToolsStatus() {
+  const bar = document.getElementById('toolsStatusBar');
+  bar.textContent = 'Checking tools…';
+  try {
+    const s = await api('/api/tools/status');
+
+    const t = s.tools;
+    const parts = [
+      t.apkeep  ? '✅ apkeep' : '❌ apkeep (install: cargo install apkeep)',
+      t.java    ? '✅ java'   : '❌ java (install JDK)',
+      t.adb     ? '✅ adb'    : '❌ adb',
+      t.zipalign ? '✅ zipalign' : '❌ zipalign',
+      t.apksigner ? '✅ apksigner' : '❌ apksigner',
+    ];
+    bar.textContent = parts.join('   |   ');
+
+    // Injector status
+    const ds = document.getElementById('injectorStatus');
+    if (!t.java) {
+      ds.textContent = 'Java not found — install JDK'; ds.className = 'tools-statusrow err';
+    } else if (!t.jarLibsExist) {
+      ds.textContent = 'jar_libs/ missing — run: make copy-assets'; ds.className = 'tools-statusrow err';
+    } else if (!t.injectorCompiled) {
+      ds.textContent = 'LogInjector not compiled — click Compile LogInjector'; ds.className = 'tools-statusrow warn';
+    } else {
+      ds.textContent = 'LogInjector ready ✅'; ds.className = 'tools-statusrow ok';
+    }
+
+    // Devices
+    updateDeviceList(s.devices);
+  } catch (e) {
+    bar.textContent = 'Could not load tool status: ' + e.message;
+  }
+}
+
+function updateDeviceList(devices) {
+  const sel = document.getElementById('deviceSelect');
+  const statusEl = document.getElementById('deviceStatus');
+  sel.innerHTML = '';
+  if (!devices || !devices.length) {
+    sel.innerHTML = '<option value="">No devices connected</option>';
+    statusEl.textContent = 'No ADB devices found. Connect a device or start an emulator.';
+    statusEl.className = 'tools-statusrow warn';
+  } else {
+    for (const d of devices) {
+      const opt = document.createElement('option');
+      opt.value = d.serial;
+      opt.textContent = d.model + ' (' + d.serial + ') [' + d.type + ']';
+      sel.appendChild(opt);
+    }
+    statusEl.textContent = devices.length + ' device(s) connected';
+    statusEl.className = 'tools-statusrow ok';
+  }
+}
+
+async function refreshDevices() {
+  const s = await api('/api/tools/status');
+  updateDeviceList(s.devices);
+}
+
+function selectAllCats(val) {
+  document.querySelectorAll('.cat-cb').forEach(cb => cb.checked = val);
+}
+
+// ── Tools log ─────────────────────────────────────────────────────────────────
+
+function appendToolsLog(line) {
+  if (typeof line !== 'string') return;
+  const el = document.getElementById('toolsLog');
+  const div = document.createElement('div');
+  const lo = line.toLowerCase();
+  let cls = 'log-def';
+  if (lo.includes('[ok]') || lo.includes('success') || lo.startsWith('--- ')) cls = 'log-ok';
+  else if (lo.includes('[error]') || lo.includes('failed') || lo.includes('error:')) cls = 'log-err';
+  else if (lo.includes('[warn]') || lo.includes('warning')) cls = 'log-warn';
+  else if (lo.startsWith('---') || lo.startsWith('===')) cls = 'log-hdr';
+  div.className = cls;
+  div.textContent = line;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function clearToolsLog() {
+  document.getElementById('toolsLog').innerHTML = '';
+}
+
+function streamJob(jobId, onDone) {
+  const es = new EventSource('/api/tools/stream/' + jobId);
+  es.onmessage = e => {
+    const data = JSON.parse(e.data);
+    if (data && data.__done) { es.close(); onDone(data.error); return; }
+    appendToolsLog(typeof data === 'string' ? data : JSON.stringify(data));
+  };
+  es.onerror = () => { es.close(); onDone('Stream error'); };
+  return es;
+}
+
+// ── Download APKs ─────────────────────────────────────────────────────────────
+
+function onBackendChange(radio) {
+  const warn = document.getElementById('dlBackendWarn');
+  if (radio.value === 'google-play') {
+    warn.textContent = 'Uses Appium to automate the Play Store on your connected device. Device must be signed in to a Google account.';
+    warn.style.display = 'block';
+    warn.className = 'tools-statusrow warn';
+  } else {
+    warn.textContent = '';
+    warn.style.display = 'none';
+  }
+}
+
+async function startDownload() {
+  const categories = [...document.querySelectorAll('.cat-cb:checked')].map(cb => cb.value);
+  if (!categories.length) { appendToolsLog('[WARN] Select at least one category.'); return; }
+  const outputDir = document.getElementById('dlOutputDir').value.trim() || (document.getElementById('dlOutputDir').placeholder);
+  const count = parseInt(document.getElementById('dlCount').value) || 5;
+  const backend = document.querySelector('input[name="dlBackend"]:checked')?.value || 'apkpure';
+  const deviceSerial = document.getElementById('deviceSelect')?.value || null;
+
+  if (backend === 'google-play' && !deviceSerial) {
+    appendToolsLog('[ERROR] Google Play download requires a connected device. Connect a device or emulator first.');
+    return;
+  }
+
+  document.getElementById('btnStartDownload').disabled = true;
+  document.getElementById('btnCancelDownload').disabled = false;
+  appendToolsLog('--- Starting download: ' + categories.length + ' categor(ies), ' + count + ' apps each, backend=' + backend + ' ---');
+
+  const r = await api('/api/tools/download', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ categories, count, outputDir, backend, deviceSerial }) });
+  currentJobs.download = r.jobId;
+  streamJob(r.jobId, err => {
+    document.getElementById('btnStartDownload').disabled = false;
+    document.getElementById('btnCancelDownload').disabled = true;
+    currentJobs.download = null;
+    if (err) appendToolsLog('[ERROR] ' + err);
+    else appendToolsLog('--- Download complete ---');
+  });
+}
+
+// ── Log Injection ──────────────────────────────────────────────────────────────
+
+async function compileInjector() {
+  appendToolsLog('--- Compiling LogInjector.java ---');
+  const r = await api('/api/tools/compile', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+  streamJob(r.jobId, err => {
+    if (err) appendToolsLog('[ERROR] ' + err);
+    refreshToolsStatus();
+  });
+}
+
+async function startInjection() {
+  const apkDir = document.getElementById('injectApkDir').value.trim();
+  const outputDir = document.getElementById('injectOutputDir').value.trim() || document.getElementById('injectOutputDir').placeholder;
+  const patternsRaw = document.getElementById('injectPatterns').value.trim();
+  const patterns = patternsRaw ? patternsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+  if (!apkDir) { appendToolsLog('[WARN] Enter an APK directory first.'); return; }
+
+  document.getElementById('btnStartInject').disabled = true;
+  document.getElementById('btnCancelInject').disabled = false;
+  appendToolsLog('--- Starting injection: ' + apkDir + ' ---');
+
+  const r = await api('/api/tools/inject', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ apkDir, patterns, outputDir }) });
+  currentJobs.inject = r.jobId;
+  streamJob(r.jobId, err => {
+    document.getElementById('btnStartInject').disabled = false;
+    document.getElementById('btnCancelInject').disabled = true;
+    currentJobs.inject = null;
+    if (err) appendToolsLog('[ERROR] ' + err);
+    else appendToolsLog('--- Injection complete ---');
+  });
+}
+
+// ── Instrumentation ───────────────────────────────────────────────────────────
+
+async function startInstrumentation() {
+  const apkDir = document.getElementById('instrumentApkDir').value.trim();
+  const logDir = document.getElementById('instrumentLogDir').value.trim();
+  const deviceSerial = document.getElementById('deviceSelect').value || null;
+  if (!apkDir) { appendToolsLog('[WARN] Enter an APK directory to install from.'); return; }
+
+  document.getElementById('btnStartInstrument').disabled = true;
+  document.getElementById('btnCancelInstrument').disabled = false;
+  appendToolsLog('--- Scanning ' + apkDir + ' for APK bundles ---');
+
+  const r = await api('/api/tools/instrument', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ apkDir, logDir: logDir || null, deviceSerial }) });
+  currentJobs.instrument = r.jobId;
+  streamJob(r.jobId, err => {
+    document.getElementById('btnStartInstrument').disabled = false;
+    document.getElementById('btnCancelInstrument').disabled = true;
+    currentJobs.instrument = null;
+    if (err && err !== 'Cancelled') appendToolsLog('[ERROR] ' + err);
+  });
+}
+
+async function cancelCurrentJob(type) {
+  const jobId = currentJobs[type];
+  if (!jobId) return;
+  await api('/api/tools/cancel', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ jobId }) });
+  appendToolsLog('[INFO] Cancellation requested for ' + type + ' job');
+}
+
+// ── Log Viewer ────────────────────────────────────────────────────────────────
+
+function initLogsTab() {
+  const dir = document.getElementById('logDirInput').value.trim();
+  if (!dir) {
+    document.getElementById('logDirInput').value = (typeof os !== 'undefined' ? '' : '') || '~/MADPro_Logcat';
+    refreshLogFileList();
+  }
+}
+
+async function refreshLogFileList() {
+  const dir = document.getElementById('logDirInput').value.trim() || '~/MADPro_Logcat';
+  try {
+    const data = await api('/api/logs/list?dir=' + encodeURIComponent(dir));
+    const sel = document.getElementById('logFileSelect');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">— select a log file —</option>';
+    for (const f of (data.files || [])) {
+      const opt = document.createElement('option');
+      opt.value = f.path;
+      opt.textContent = f.name;
+      sel.appendChild(opt);
+    }
+    if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+    document.getElementById('logViewerMeta').textContent =
+      data.files.length ? data.files.length + ' log file(s) in ' + data.dir : 'No .log files found in ' + data.dir;
+  } catch (e) {
+    document.getElementById('logViewerMeta').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function loadLogFile() {
+  const file = document.getElementById('logFileSelect').value;
+  if (!file) return;
+  try {
+    const data = await api('/api/logs/read?file=' + encodeURIComponent(file));
+    const out = document.getElementById('logViewerOutput');
+    if (!data.entries || !data.entries.length) {
+      out.textContent = '(No SootInjection lines found in this log file)';
+      document.getElementById('logViewerMeta').textContent = '0 matches in ' + file;
+      return;
+    }
+    out.innerHTML = '';
+    for (const e of data.entries) {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:3px 0; border-bottom:1px solid rgba(255,255,255,.04); display:flex; gap:12px; align-items:baseline;';
+      if (e.className) {
+        const cls = document.createElement('span');
+        cls.style.cssText = 'color:var(--accent-no-ads); min-width:0; flex-shrink:0; max-width:55%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+        cls.textContent = e.className;
+        const sep = document.createElement('span');
+        sep.style.cssText = 'color:var(--text-muted); flex-shrink:0;';
+        sep.textContent = '→';
+        const mth = document.createElement('span');
+        mth.style.cssText = 'color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;';
+        mth.title = e.sig;
+        mth.textContent = e.returnType + ' ' + e.methodName + '(' + e.args + ')';
+        row.appendChild(cls); row.appendChild(sep); row.appendChild(mth);
+      } else {
+        row.style.color = 'var(--text-muted)';
+        row.textContent = e.sig;
+      }
+      out.appendChild(row);
+    }
+    const unique = data.entries.filter(e => !e.duplicate).length;
+    document.getElementById('logViewerMeta').textContent =
+      data.entries.length + ' call(s), ' + unique + ' unique methods — ' + file;
+    out.scrollTop = 0;
+  } catch (e) {
+    document.getElementById('logViewerOutput').textContent = 'Error loading file: ' + e.message;
+  }
+}
+
+function clearLogViewer() {
+  document.getElementById('logViewerOutput').textContent = 'Select a log directory and file above.';
+  document.getElementById('logViewerMeta').textContent = '';
+  document.getElementById('logFileSelect').innerHTML = '<option value="">— select a log file —</option>';
+}
+
+// ── Browse for tools fields ───────────────────────────────────────────────────
+
+function browseForTools(inputId) {
+  toolsBrowseTarget = inputId;
+  const current = document.getElementById(inputId)?.value.trim() || '';
+  loadToolsBrowserDir(current || null);
+  document.getElementById('toolsBrowserModal').classList.add('open');
+}
+
+function browseForApk() {
+  const current = document.getElementById('instrumentApkPath')?.value.trim() || '';
+  const lastSlash = current.lastIndexOf('/');
+  const startDir = current && lastSlash > 0 ? current.substring(0, lastSlash) : null;
+  loadApkBrowserDir(startDir || null);
+  document.getElementById('toolsApkBrowserModal').classList.add('open');
+}
+
+let currentToolsBrowsePath = '';
+
+async function loadToolsBrowserDir(dirPath) {
+  try {
+    const data = await api('/api/browse?dir=' + encodeURIComponent(dirPath || ''));
+    currentToolsBrowsePath = data.current;
+    renderToolsBrowserList(data, 'toolsDirList', 'toolsBrowserPath', loadToolsBrowserDir);
+  } catch {}
+}
+
+function renderToolsBrowserList(data, listId, pathId, navigateFn) {
+  document.getElementById(pathId).textContent = data.current;
+  const list = document.getElementById(listId);
+  list.innerHTML = '';
+  function makeItem(icon, label, target, cls) {
+    const d = document.createElement('div');
+    d.className = 'dir-item' + (cls ? ' ' + cls : '');
+    const ic = document.createElement('span'); ic.className = 'icon'; ic.textContent = icon;
+    const lb = document.createElement('span'); lb.textContent = label;
+    d.appendChild(ic); d.appendChild(lb);
+    d.addEventListener('click', () => navigateFn(target));
+    return d;
+  }
+  if (data.parent) list.appendChild(makeItem('⬆', '.. (up one level)', data.parent, 'up'));
+  if (data.home && data.home !== data.current) list.appendChild(makeItem('🏠', 'Home', data.home, ''));
+  for (const d of data.dirs) list.appendChild(makeItem('📁', d.name, d.path, ''));
+  if (!data.parent && !data.dirs.length) list.innerHTML = '<div class="empty">No subdirectories.</div>';
+}
+
+function selectToolsDir() {
+  if (toolsBrowseTarget && currentToolsBrowsePath) {
+    document.getElementById(toolsBrowseTarget).value = currentToolsBrowsePath;
+  }
+  document.getElementById('toolsBrowserModal').classList.remove('open');
+}
+
+// APK file browser (shows files too)
+let currentApkBrowsePath = '';
+async function loadApkBrowserDir(dirPath) {
+  try {
+    const data = await api('/api/browse-apks?dir=' + encodeURIComponent(dirPath || ''));
+    currentApkBrowsePath = data.current;
+    document.getElementById('apkBrowserPath').textContent = data.current;
+    const list = document.getElementById('apkDirList');
+    list.innerHTML = '';
+    function makeItem(icon, label, target, cls, isFile) {
+      const d = document.createElement('div');
+      d.className = 'dir-item' + (cls ? ' ' + cls : '');
+      const ic = document.createElement('span'); ic.className = 'icon'; ic.textContent = icon;
+      const lb = document.createElement('span'); lb.textContent = label;
+      d.appendChild(ic); d.appendChild(lb);
+      if (isFile) {
+        d.style.color = 'var(--text-link)';
+        d.addEventListener('click', () => {
+          document.getElementById('instrumentApkPath').value = target;
+          document.getElementById('toolsApkBrowserModal').classList.remove('open');
+        });
+      } else {
+        d.addEventListener('click', () => loadApkBrowserDir(target));
+      }
+      return d;
+    }
+    if (data.parent) list.appendChild(makeItem('⬆', '.. (up one level)', data.parent, 'up', false));
+    if (data.home && data.home !== data.current) list.appendChild(makeItem('🏠', 'Home', data.home, '', false));
+    for (const d of data.dirs) list.appendChild(makeItem('📁', d.name, d.path, '', false));
+    for (const f of (data.apks || [])) list.appendChild(makeItem('📦', f.name, f.path, '', true));
+    if (!data.parent && !data.dirs.length && !(data.apks || []).length) list.innerHTML = '<div class="empty">No items found.</div>';
+  } catch {}
+}
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
   try {
@@ -960,6 +1607,81 @@ const server = http.createServer(async (req, res) => {
     });
 
     return jsonResponse(res, { ok: true });
+  }
+
+  // GET /api/browse-apks?dir=/path  — dirs + .apk files
+  if (req.method === "GET" && pathname === "/api/browse-apks") {
+    const dirParam = reqUrl.searchParams.get("dir") || os.homedir();
+    const targetDir = dirParam.trim() || os.homedir();
+    try {
+      const abs = path.resolve(targetDir);
+      const entries = fs.readdirSync(abs, { withFileTypes: true });
+      const dirs = entries.filter(e => e.isDirectory() && !e.name.startsWith("."))
+        .map(e => ({ name: e.name, path: path.join(abs, e.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const apks = entries.filter(e => e.isFile() && e.name.toLowerCase().endsWith(".apk"))
+        .map(e => ({ name: e.name, path: path.join(abs, e.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const parent = path.dirname(abs) !== abs ? path.dirname(abs) : null;
+      return jsonResponse(res, { current: abs, parent, dirs, apks, home: os.homedir() });
+    } catch {
+      return jsonResponse(res, { current: os.homedir(), parent: null, dirs: [], apks: [], home: os.homedir() });
+    }
+  }
+
+  // GET /api/logs/list?dir=/path — list .log files in a directory
+  if (req.method === "GET" && pathname === "/api/logs/list") {
+    const dirParam = (reqUrl.searchParams.get("dir") || "~/MADPro_Logcat").trim();
+    const abs = path.resolve(dirParam.replace(/^~/, os.homedir()));
+    try {
+      const entries = fs.readdirSync(abs, { withFileTypes: true });
+      const files = entries
+        .filter(e => e.isFile() && e.name.toLowerCase().endsWith(".log"))
+        .map(e => ({ name: e.name, path: path.join(abs, e.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return jsonResponse(res, { dir: abs, files });
+    } catch {
+      return jsonResponse(res, { dir: abs, files: [] });
+    }
+  }
+
+  // GET /api/logs/read?file=/path — return parsed SootInjection entries from a log file
+  if (req.method === "GET" && pathname === "/api/logs/read") {
+    const fileParam = reqUrl.searchParams.get("file") || "";
+    if (!fileParam) return jsonResponse(res, { error: "Missing file" }, 400);
+    const abs = path.resolve(fileParam.replace(/^~/, os.homedir()));
+    try {
+      const content = fs.readFileSync(abs, "utf8");
+      // Each injected line looks like:
+      //   04-04 15:51:45.020 D/SootInjection(12273): Entering method: <com.example.Foo: void bar(int)>
+      const MARKER = "Entering method: ";
+      // Soot sig: <com.example.ClassName: returnType methodName(args)>
+      // methodName may contain < > e.g. <init>, <clinit>
+      const SIG_RE = /^<(.+):\s+(\S+)\s+([^(]+)\(([^)]*)\)>$/;
+      const entries = [];
+      const seen = new Set();
+      for (const line of content.split("\n")) {
+        const idx = line.indexOf(MARKER);
+        if (idx === -1) continue;
+        const sig = line.slice(idx + MARKER.length).trim();
+        const m = SIG_RE.exec(sig);
+        if (m) {
+          const className = m[1].trim();
+          const returnType = m[2].trim();
+          const methodName = m[3].trim();
+          const args = m[4].trim();
+          const key = className + "#" + methodName + "(" + args + ")";
+          entries.push({ className, returnType, methodName, args, sig, key, duplicate: seen.has(key) });
+          seen.add(key);
+        } else {
+          // Fallback: couldn't parse sig, show raw
+          entries.push({ className: null, returnType: null, methodName: null, args: null, sig, key: sig, duplicate: false });
+        }
+      }
+      return jsonResponse(res, { file: abs, entries });
+    } catch (err) {
+      return jsonResponse(res, { error: err.message }, 500);
+    }
   }
 
   // GET /api/browse?dir=/path
@@ -1051,6 +1773,87 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       return jsonResponse(res, { error: err.message }, 500);
     }
+  }
+
+  // GET /api/tools/status — tool availability + device list
+  if (req.method === "GET" && pathname === "/api/tools/status") {
+    return jsonResponse(res, {
+      tools: toolsApi.checkTools(),
+      devices: toolsApi.listAdbDevices(),
+      avds: toolsApi.listAvds(),
+    });
+  }
+
+  // POST /api/tools/download  { categories, count, outputDir, backend }
+  if (req.method === "POST" && pathname === "/api/tools/download") {
+    const body = await readBody(req);
+    let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
+    if (!p.categories?.length) return jsonResponse(res, { error: "No categories" }, 400);
+    if (!p.outputDir) return jsonResponse(res, { error: "Missing outputDir" }, 400);
+    const jobId = toolsApi.startDownload({ categories: p.categories, count: p.count || 10, outputDir: p.outputDir, backend: p.backend || "apkpure", deviceSerial: p.deviceSerial || null });
+    return jsonResponse(res, { jobId });
+  }
+
+  // POST /api/tools/inject  { apkDir, patterns, outputDir }
+  if (req.method === "POST" && pathname === "/api/tools/inject") {
+    const body = await readBody(req);
+    let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
+    if (!p.apkDir) return jsonResponse(res, { error: "Missing apkDir" }, 400);
+    if (!p.outputDir) return jsonResponse(res, { error: "Missing outputDir" }, 400);
+    const jobId = toolsApi.startInjection({ apkDir: p.apkDir, patterns: p.patterns || [], outputDir: p.outputDir });
+    return jsonResponse(res, { jobId });
+  }
+
+  // POST /api/tools/compile — compile LogInjector.java on host
+  if (req.method === "POST" && pathname === "/api/tools/compile") {
+    const jobId = toolsApi.startCompile();
+    return jsonResponse(res, { jobId });
+  }
+
+  // POST /api/tools/instrument  { apkDir, logDir, deviceSerial }
+  if (req.method === "POST" && pathname === "/api/tools/instrument") {
+    const body = await readBody(req);
+    let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
+    if (!p.apkDir) return jsonResponse(res, { error: "Missing apkDir" }, 400);
+    if (!fs.existsSync(p.apkDir)) return jsonResponse(res, { error: "Directory not found: " + p.apkDir }, 400);
+    const jobId = toolsApi.startInstrumentation({ apkDir: p.apkDir, logDir: p.logDir || null, deviceSerial: p.deviceSerial || null });
+    return jsonResponse(res, { jobId });
+  }
+
+  // POST /api/tools/cancel  { jobId }
+  if (req.method === "POST" && pathname === "/api/tools/cancel") {
+    const body = await readBody(req);
+    let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
+    toolsApi.cancelJob(p.jobId);
+    return jsonResponse(res, { ok: true });
+  }
+
+  // GET /api/tools/stream/:jobId  — Server-Sent Events log stream
+  if (req.method === "GET" && pathname.startsWith("/api/tools/stream/")) {
+    const jobId = pathname.split("/").pop();
+    const job = toolsApi.getJob(jobId);
+    if (!job) { res.writeHead(404); return res.end("Job not found"); }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    // Replay existing lines
+    for (const line of job.lines) {
+      res.write(`data: ${JSON.stringify(line)}\n\n`);
+    }
+    if (job.done) {
+      res.write(`data: ${JSON.stringify({ __done: true, error: job.error })}\n\n`);
+      return res.end();
+    }
+    job.clients.push(res);
+    req.on("close", () => {
+      job.clients = job.clients.filter(c => c !== res);
+    });
+    return;
   }
 
   res.writeHead(404);

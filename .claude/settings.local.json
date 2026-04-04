@@ -28,7 +28,23 @@
       "Bash(npm list:*)",
       "Read(//home/sean/.nvm/versions/**)",
       "Read(//usr/local/bin/**)",
-      "Bash(node -e \"require\\(''''child_process''''\\).execSync\\(''''npm root -g'''', {encoding:''''utf8''''}\\)\")"
+      "Bash(node -e \"require\\(''''child_process''''\\).execSync\\(''''npm root -g'''', {encoding:''''utf8''''}\\)\")",
+      "Bash(npm --version)",
+      "Bash(npm init:*)",
+      "Bash(npm install:*)",
+      "Bash(node --check server.js)",
+      "Bash(node --check scanner.js)",
+      "Bash(node --check playstore.js)",
+      "Bash(timeout 4 node server.js)",
+      "Bash(node:*)",
+      "Bash(aapt2 dump:*)",
+      "Bash(curl -s -X POST http://localhost:3456/api/export -H 'Content-Type: application/json' -d '{\"dir\":\"/home/sean/Documents\",\"filename\":\"test-export.pdf\"}')",
+      "Bash(pkill -f \"node server.js\")",
+      "Bash(curl -s http://localhost:3456)",
+      "Bash(curl -s http://localhost:3457)",
+      "Bash(apktool --version)",
+      "Bash(ls /home/sean/Downloads/*.apk)",
+      "Bash(git check-ignore:*)"
     ]
   }
 }

@@ -57,3 +57,20 @@ desktop.ini
 *.p12
 *.pem
 *.key
+
+# ── Node.js (apk-dashboard) ───────────────────────────────────────────────────
+apk-dashboard/node_modules/
+apk-dashboard/package-lock.json
+
+# ── APK files ────────────────────────────────────────────────────────────────
+*.apk
+*.xapk
+*.apks
+
+# ── Exported reports ─────────────────────────────────────────────────────────
+*.pdf
+
+# ── Temporary / runtime ──────────────────────────────────────────────────────
+*.tmp
+*.temp
+.cache/

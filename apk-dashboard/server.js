@@ -194,6 +194,19 @@ function htmlResponse(res, html) {
   res.end(html);
 }
 
+// Extract app package names from a logcat file using nativeloader lines.
+// Pattern: /data/app/~~...==/com.foo.bar-XXXX==/  → package is "com.foo.bar"
+const NATIVELOADER_PKG_RE = /\/data\/app\/~~[^/]+\/([a-zA-Z][a-zA-Z0-9_.]*)-[A-Za-z0-9_]+=+=\//g;
+function extractAppPackages(content) {
+  const found = new Set();
+  let m;
+  NATIVELOADER_PKG_RE.lastIndex = 0;
+  while ((m = NATIVELOADER_PKG_RE.exec(content)) !== null) {
+    found.add(m[1]);
+  }
+  return [...found];
+}
+
 // Parse a logcat file and return all SootInjection entries
 function parseLogEntries(absPath) {
   const content = fs.readFileSync(absPath, "utf8");
@@ -694,7 +707,8 @@ function renderHtml() {
 
 <!-- ── Log Viewer tab content ── -->
 <div id="tabLogs" style="display:none; padding:20px 24px;">
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+  <!-- Directory + single-file row -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
     <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:260px;">
       <input type="text" id="logDirInput" class="tools-input" style="flex:1;" placeholder="~/MADPro_Logcat" />
       <button class="tools-btn-sm" onclick="browseForTools('logDirInput')">Browse…</button>
@@ -706,13 +720,21 @@ function renderHtml() {
     <button class="tools-btn-sm" onclick="loadLogFile()">Refresh</button>
     <button class="tools-btn-sm" onclick="clearLogViewer()">Clear</button>
   </div>
+  <!-- App package row — populated by scanning all logs in the directory -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+    <div style="font-size:.8rem;color:var(--text-muted);white-space:nowrap;">App:</div>
+    <select id="logAppSelect" class="tools-input" style="min-width:280px;max-width:520px;" onchange="loadAppLogs()">
+      <option value="">— load directory to detect apps —</option>
+    </select>
+    <div style="font-size:.78rem;color:var(--text-muted);" id="logAppMeta"></div>
+  </div>
   <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:8px;" id="logViewerMeta"></div>
   <div id="logViewerOutput" style="
     background:var(--card-bg); border:1px solid var(--card-border); border-radius:8px;
     padding:14px 16px; font-family:monospace; font-size:.78rem; line-height:1.6;
     white-space:pre-wrap; word-break:break-all; max-height:45vh; overflow-y:auto;
     color:var(--text);
-  ">Select a log directory and file above.</div>
+  ">Select a log directory above — detected apps will appear in the App dropdown.</div>
 
   <!-- FSM Model + Keyword Search -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px;align-items:start;">
@@ -1798,12 +1820,135 @@ async function _renderLogPage(file, offset) {
 }
 
 function clearLogViewer() {
-  document.getElementById('logViewerOutput').textContent = 'Select a log directory and file above.';
+  document.getElementById('logViewerOutput').textContent = 'Select a log directory above — detected apps will appear in the App dropdown.';
   document.getElementById('logViewerMeta').textContent = '';
   document.getElementById('logFileSelect').innerHTML = '<option value="">— select a log file —</option>';
+  document.getElementById('logAppSelect').innerHTML = '<option value="">— load directory to detect apps —</option>';
+  document.getElementById('logAppMeta').textContent = '';
+  _appScanData = null;
+  _appLogEntries = [];
   _fsmLogEntries = [];
   _currentLogFile = '';
   clearKeywordSearch();
+}
+
+// ── App-based log loading ─────────────────────────────────────────────────────
+
+// _appScanData: result from /api/logs/scan-dir — { dir, packages: [{name, files:[]}] }
+let _appScanData = null;
+// _appLogEntries: merged entries for the currently selected app
+let _appLogEntries = [];
+
+// Called when the user clicks "Load" on the directory input.
+// Scans the directory for .log files and detects app package names via nativeloader lines.
+async function refreshLogFileList() {
+  const dir = document.getElementById('logDirInput').value.trim() || '~/MADPro_Logcat';
+  const appSel = document.getElementById('logAppSelect');
+  const appMeta = document.getElementById('logAppMeta');
+  appSel.innerHTML = '<option value="">— scanning… —</option>';
+  appMeta.textContent = '';
+  try {
+    // File list for single-file dropdown (existing behaviour)
+    const listData = await api('/api/logs/list?dir=' + encodeURIComponent(dir));
+    const fileSel = document.getElementById('logFileSelect');
+    const prev = fileSel.value;
+    fileSel.innerHTML = '<option value="">— select a log file —</option>';
+    for (const f of (listData.files || [])) {
+      const opt = document.createElement('option');
+      opt.value = f.path;
+      opt.textContent = f.name;
+      fileSel.appendChild(opt);
+    }
+    if (prev && [...fileSel.options].some(o => o.value === prev)) fileSel.value = prev;
+
+    // App scan
+    const scanData = await api('/api/logs/scan-dir?dir=' + encodeURIComponent(dir));
+    _appScanData = scanData;
+    appSel.innerHTML = '<option value="">— select an app —</option>';
+    for (const pkg of (scanData.packages || [])) {
+      const opt = document.createElement('option');
+      opt.value = pkg.name;
+      opt.textContent = pkg.name + ' (' + pkg.files.length + ' file' + (pkg.files.length !== 1 ? 's' : '') + ')';
+      appSel.appendChild(opt);
+    }
+    const pkgCount = (scanData.packages || []).length;
+    appMeta.textContent = pkgCount
+      ? pkgCount + ' app' + (pkgCount !== 1 ? 's' : '') + ' detected across ' + scanData.totalFiles + ' log file' + (scanData.totalFiles !== 1 ? 's' : '')
+      : 'No app packages detected in ' + scanData.totalFiles + ' log file' + (scanData.totalFiles !== 1 ? 's' : '');
+
+    document.getElementById('logViewerMeta').textContent =
+      listData.files.length ? listData.files.length + ' log file(s) in ' + listData.dir : 'No .log files found in ' + listData.dir;
+  } catch (e) {
+    appSel.innerHTML = '<option value="">— error scanning —</option>';
+    appMeta.textContent = 'Error: ' + e.message;
+    document.getElementById('logViewerMeta').textContent = 'Error: ' + e.message;
+  }
+}
+
+// Called when the user selects an app from the dropdown.
+// Loads all log files associated with that app package and renders the class→method view.
+async function loadAppLogs() {
+  const pkg = document.getElementById('logAppSelect').value;
+  if (!pkg || !_appScanData) return;
+  const pkgEntry = (_appScanData.packages || []).find(p => p.name === pkg);
+  if (!pkgEntry) return;
+
+  const dir = _appScanData.dir;
+  const files = pkgEntry.files.map(f => dir + '/' + f);
+
+  const out = document.getElementById('logViewerOutput');
+  const meta = document.getElementById('logViewerMeta');
+  out.innerHTML = '<span style="color:var(--text-muted)">Loading ' + files.length + ' log file(s) for ' + pkg + '…</span>';
+  meta.textContent = 'Loading…';
+  try {
+    const data = await api('/api/logs/multi-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files }),
+    });
+    _appLogEntries = data.entries || [];
+    _currentLogFile = ''; // app-mode: no single file
+    meta.textContent = 'Loaded ' + files.length + ' file(s) for ' + pkg + ' — ' + data.total + ' call(s), ' + data.unique + ' unique';
+    renderAppLogEntries();
+  } catch (e) {
+    out.textContent = 'Error: ' + e.message;
+    meta.textContent = '';
+  }
+}
+
+function renderAppLogEntries() {
+  const out = document.getElementById('logViewerOutput');
+  const meta = document.getElementById('logViewerMeta');
+  out.innerHTML = '';
+
+  // Show only unique entries
+  const unique = _appLogEntries.filter(e => !e.duplicate);
+  if (!unique.length) {
+    out.textContent = '(No SootInjection method entries found for this app)';
+    return;
+  }
+
+  for (const e of unique) {
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:3px 0; border-bottom:1px solid rgba(255,255,255,.04); display:flex; gap:12px; align-items:baseline;';
+    if (e.className) {
+      const cls = document.createElement('span');
+      cls.style.cssText = 'color:var(--accent-no-ads); min-width:0; flex-shrink:0; max-width:55%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+      cls.textContent = e.className;
+      const sep = document.createElement('span');
+      sep.style.cssText = 'color:var(--text-muted); flex-shrink:0;';
+      sep.textContent = '→';
+      const mth = document.createElement('span');
+      mth.style.cssText = 'color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;';
+      mth.title = e.sig + (e.sourceFile ? ' [' + e.sourceFile + ']' : '');
+      mth.textContent = e.returnType + ' ' + e.methodName + '(' + e.args + ')';
+      row.appendChild(cls); row.appendChild(sep); row.appendChild(mth);
+    } else {
+      row.style.color = 'var(--text-muted)';
+      row.textContent = e.sig;
+    }
+    out.appendChild(row);
+  }
 }
 
 // ── Browse for tools fields ───────────────────────────────────────────────────
@@ -3027,6 +3172,72 @@ const server = http.createServer(async (req, res) => {
       }
 
       return jsonResponse(res, { perKeyword, sequence });
+    } catch (err) {
+      return jsonResponse(res, { error: err.message }, 500);
+    }
+  }
+
+  // GET /api/logs/scan-dir?dir=/path
+  // Scans all .log files in dir, extracts app package names from nativeloader lines.
+  // Returns { dir, packages: [{name, files:[basename,...]}] }
+  if (req.method === "GET" && pathname === "/api/logs/scan-dir") {
+    const dirParam = (reqUrl.searchParams.get("dir") || "~/MADPro_Logcat").trim();
+    const abs = path.resolve(dirParam.replace(/^~/, os.homedir()));
+    try {
+      const dirents = fs.readdirSync(abs, { withFileTypes: true });
+      const logFiles = dirents
+        .filter(e => e.isFile() && e.name.toLowerCase().endsWith(".log"))
+        .map(e => path.join(abs, e.name));
+      // Map package name → set of files it appears in
+      const pkgMap = new Map(); // pkg -> Set of basenames
+      for (const fp of logFiles) {
+        const content = fs.readFileSync(fp, "utf8");
+        const pkgs = extractAppPackages(content);
+        for (const pkg of pkgs) {
+          if (!pkgMap.has(pkg)) pkgMap.set(pkg, new Set());
+          pkgMap.get(pkg).add(path.basename(fp));
+        }
+      }
+      const packages = [...pkgMap.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([name, files]) => ({ name, files: [...files].sort() }));
+      return jsonResponse(res, { dir: abs, totalFiles: logFiles.length, packages });
+    } catch (err) {
+      return jsonResponse(res, { error: err.message }, 500);
+    }
+  }
+
+  // POST /api/logs/multi-read — body: { files: ["/path/a.log", ...] }
+  // Returns merged entries from all files, plus app package names from nativeloader lines.
+  if (req.method === "POST" && pathname === "/api/logs/multi-read") {
+    let body = "";
+    await new Promise(r => { req.on("data", c => body += c); req.on("end", r); });
+    let files;
+    try { files = JSON.parse(body).files; } catch { return jsonResponse(res, { error: "Invalid body" }, 400); }
+    if (!Array.isArray(files) || !files.length) return jsonResponse(res, { error: "files array required" }, 400);
+    try {
+      const allEntries = [];
+      const seenGlobal = new Set();
+      const appPackages = new Set();
+      for (const fp of files) {
+        const abs = path.resolve(fp.replace(/^~/, os.homedir()));
+        const content = fs.readFileSync(abs, "utf8");
+        // Extract app packages from nativeloader lines in this file
+        for (const pkg of extractAppPackages(content)) appPackages.add(pkg);
+        const entries = parseLogEntries(abs);
+        for (const e of entries) {
+          const dup = seenGlobal.has(e.key);
+          allEntries.push({ ...e, duplicate: dup, sourceFile: path.basename(abs) });
+          seenGlobal.add(e.key);
+        }
+      }
+      const unique = allEntries.filter(e => !e.duplicate).length;
+      return jsonResponse(res, {
+        total: allEntries.length,
+        unique,
+        packages: [...appPackages].sort(),
+        entries: allEntries,
+      });
     } catch (err) {
       return jsonResponse(res, { error: err.message }, 500);
     }

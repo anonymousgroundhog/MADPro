@@ -1113,6 +1113,132 @@ return r1;</pre>
     <div id="jimpleDoneMsg" style="display:none;margin-top:8px;padding:8px 12px;border-radius:6px;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);color:#10b981;font-size:.78rem;"></div>
   </div>
 
+  <!-- CFG Visualization Panel (below the output log) -->
+  <div id="jimpleCfgPanel" class="card" style="display:none;margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <div style="font-weight:600;font-size:.85rem;">📊 Control Flow Graphs</div>
+      <div style="display:flex;gap:6px;">
+        <button onclick="jimpleCfgOpenChat()" title="Chat with AI about this method" style="padding:4px 10px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.75rem;cursor:pointer;">💬 Chat with AI</button>
+        <button onclick="jimpleCfgFullscreen()" title="Fullscreen" style="padding:4px 10px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.75rem;cursor:pointer;">⛶ Fullscreen</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+      <label style="font-size:.75rem;color:var(--text-muted);white-space:nowrap;">Method:</label>
+      <select id="jimpleCfgMethodSelect" onchange="jimpleRenderSelectedCfg()"
+        style="flex:1;padding:5px 8px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.78rem;"></select>
+      <button onclick="jimpleCfgZoomIn()" title="Zoom in" style="padding:4px 8px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.75rem;cursor:pointer;">+</button>
+      <button onclick="jimpleCfgZoomOut()" title="Zoom out" style="padding:4px 8px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.75rem;cursor:pointer;">−</button>
+      <button onclick="jimpleCfgReset()" title="Fit to view" style="padding:4px 8px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.75rem;cursor:pointer;">⊙</button>
+    </div>
+    <div id="jimpleCfgStatus" style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px;"></div>
+    <!-- SVG canvas with pan/zoom -->
+    <div id="jimpleCfgViewport" style="width:100%;height:580px;overflow:hidden;background:#0d1117;border-radius:8px;border:1px solid var(--card-border);position:relative;cursor:grab;">
+      <svg id="jimpleCfgSvg" style="position:absolute;top:0;left:0;width:100%;height:100%;" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="cfgArrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+          </marker>
+          <marker id="cfgArrowTrue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+          </marker>
+          <marker id="cfgArrowFalse" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444"/>
+          </marker>
+        </defs>
+        <g id="jimpleCfgRoot"></g>
+      </svg>
+    </div>
+    <div style="margin-top:8px;display:flex;gap:16px;font-size:.72rem;color:var(--text-muted);align-items:center;">
+      <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:18px;height:2px;background:#64748b;"></span> Fall-through</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:18px;height:2px;background:#10b981;"></span> Branch true / goto</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:18px;height:2px;background:#ef4444;"></span> Branch false</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:rgba(16,185,129,0.18);border:1px solid #10b981;"></span> Entry</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:rgba(239,68,68,0.15);border:1px solid #ef4444;"></span> Exit</span>
+      <span style="margin-left:auto;">Drag to pan · Scroll to zoom</span>
+    </div>
+  </div>
+
+  <!-- CFG Fullscreen Modal -->
+  <div id="jimpleCfgFsModal" style="display:none;position:fixed;inset:0;z-index:9999;background:#0d1117;flex-direction:column;">
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 16px;background:#111827;border-bottom:1px solid var(--card-border);flex-shrink:0;">
+      <span id="jimpleCfgFsTitle" style="font-size:.82rem;color:var(--text-muted);font-family:monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+      <button onclick="jimpleCfgZoomIn(true)" style="padding:4px 10px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.8rem;cursor:pointer;">+</button>
+      <button onclick="jimpleCfgZoomOut(true)" style="padding:4px 10px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.8rem;cursor:pointer;">−</button>
+      <button onclick="jimpleCfgReset(true)" style="padding:4px 10px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.8rem;cursor:pointer;">⊙ Fit</button>
+      <button onclick="jimpleCfgOpenChat()" style="padding:4px 10px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.8rem;cursor:pointer;">💬 Chat with AI</button>
+      <button onclick="jimpleCfgCloseFullscreen()" style="padding:4px 12px;border-radius:5px;border:1px solid #ef4444;background:transparent;color:#ef4444;font-size:.8rem;cursor:pointer;">✕ Close</button>
+    </div>
+    <div id="jimpleCfgFsViewport" style="flex:1;overflow:hidden;position:relative;cursor:grab;">
+      <svg id="jimpleCfgFsSvg" style="position:absolute;top:0;left:0;width:100%;height:100%;" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="cfgArrowFs" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+          </marker>
+          <marker id="cfgArrowTrueFs" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+          </marker>
+          <marker id="cfgArrowFalseFs" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444"/>
+          </marker>
+        </defs>
+        <g id="jimpleCfgFsRoot"></g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- CFG AI Chat Modal -->
+  <div id="jimpleCfgChatModal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);align-items:stretch;justify-content:center;">
+    <div style="width:100%;max-width:1100px;margin:0 auto;display:flex;flex-direction:column;background:var(--card-bg);border-left:1px solid var(--card-border);border-right:1px solid var(--card-border);">
+      <!-- Header bar -->
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--card-border);flex-shrink:0;">
+        <span style="font-size:.82rem;font-weight:600;">💬 Chat with AI about Jimple / CFG</span>
+        <span style="flex:1;"></span>
+        <button onclick="jimpleCfgChatClear()" style="padding:3px 9px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.72rem;cursor:pointer;">Clear Chat</button>
+        <button onclick="jimpleCfgCloseChat()" style="padding:3px 9px;border-radius:5px;border:1px solid #ef4444;background:transparent;color:#ef4444;font-size:.72rem;cursor:pointer;">✕ Close</button>
+      </div>
+      <!-- Body: sidebar + chat -->
+      <div style="flex:1;display:flex;min-height:0;overflow:hidden;">
+
+        <!-- Left: selection sidebar -->
+        <div style="width:280px;min-width:220px;max-width:320px;display:flex;flex-direction:column;border-right:1px solid var(--card-border);background:var(--surface);flex-shrink:0;">
+          <div style="padding:8px 12px;border-bottom:1px solid var(--card-border);flex-shrink:0;">
+            <div style="font-size:.72rem;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Context Selection</div>
+            <input id="jimpleCfgChatFilter" type="text" placeholder="Filter…" oninput="jimpleCfgChatFilterList()"
+              style="width:100%;box-sizing:border-box;padding:4px 8px;border-radius:5px;border:1px solid var(--card-border);background:var(--card-bg);color:var(--text);font-size:.75rem;" />
+            <div style="display:flex;gap:6px;margin-top:6px;">
+              <button onclick="jimpleCfgChatSelectAll(true)" style="flex:1;padding:3px 0;border-radius:4px;border:1px solid var(--card-border);background:var(--card-bg);color:var(--text);font-size:.68rem;cursor:pointer;">All</button>
+              <button onclick="jimpleCfgChatSelectAll(false)" style="flex:1;padding:3px 0;border-radius:4px;border:1px solid var(--card-border);background:var(--card-bg);color:var(--text);font-size:.68rem;cursor:pointer;">None</button>
+            </div>
+          </div>
+          <!-- Tab strip: CFGs | Classes -->
+          <div style="display:flex;border-bottom:1px solid var(--card-border);flex-shrink:0;">
+            <button id="jimpleCfgChatTabCfg" onclick="jimpleCfgChatSwitchTab('cfg')"
+              style="flex:1;padding:5px 0;border:none;border-bottom:2px solid var(--accent-no-ads);background:transparent;color:var(--text);font-size:.72rem;cursor:pointer;font-weight:600;">CFG Methods</button>
+            <button id="jimpleCfgChatTabClass" onclick="jimpleCfgChatSwitchTab('class')"
+              style="flex:1;padding:5px 0;border:none;border-bottom:2px solid transparent;background:transparent;color:var(--text-muted);font-size:.72rem;cursor:pointer;">Jimple Classes</button>
+          </div>
+          <!-- CFG method list -->
+          <div id="jimpleCfgChatListCfg" style="flex:1;overflow-y:auto;padding:6px 0;"></div>
+          <!-- Class list (hidden by default) -->
+          <div id="jimpleCfgChatListClass" style="flex:1;overflow-y:auto;padding:6px 0;display:none;"></div>
+          <!-- Selection summary -->
+          <div id="jimpleCfgChatSelCount" style="padding:6px 12px;font-size:.69rem;color:var(--text-muted);border-top:1px solid var(--card-border);flex-shrink:0;"></div>
+        </div>
+
+        <!-- Right: chat panel -->
+        <div style="flex:1;display:flex;flex-direction:column;min-width:0;">
+          <div id="jimpleCfgChatMessages" style="flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:0;"></div>
+          <div style="display:flex;gap:8px;padding:10px 16px;border-top:1px solid var(--card-border);flex-shrink:0;background:var(--surface);">
+            <textarea id="jimpleCfgChatInput" rows="2" placeholder="Ask about the selected methods / classes…" onkeydown="jimpleCfgChatKeydown(event)"
+              style="flex:1;resize:none;padding:7px 10px;border-radius:7px;border:1px solid var(--card-border);background:var(--card-bg);color:var(--text);font-size:.82rem;font-family:inherit;line-height:1.45;"></textarea>
+            <button id="jimpleCfgChatSendBtn" onclick="jimpleCfgChatSend()" style="padding:8px 16px;border-radius:7px;border:none;background:var(--accent-no-ads);color:#fff;font-size:.82rem;cursor:pointer;white-space:nowrap;">Send</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
   <!-- Jimple File Viewer Panel -->
   <div class="card">
     <div style="font-weight:600;font-size:.85rem;margin-bottom:12px;">View Jimple File</div>
@@ -1140,6 +1266,7 @@ return r1;</pre>
     </div>
     <div id="jimpleViewStatus" style="font-size:.78rem;color:var(--text-muted);"></div>
   </div>
+
 </div><!-- /tabJimple -->
 
 <!-- ── Settings tab content ── -->
@@ -3306,6 +3433,7 @@ function jimpleRunSoot() {
               doneMsg.textContent = '✓ Soot completed. Jimple files written to: ' + outDir;
               document.getElementById('jimpleViewDir').value = outDir;
               jimpleListFiles();
+              jimpleBuildCfgFromDir(outDir);
             } else if (ev.type === 'error') {
               runBtn.disabled = false;
               cancelBtn.style.display = 'none';
@@ -3348,10 +3476,45 @@ function jimpleListFiles() {
   .then(function(d) {
     if (d.error) { document.getElementById('jimpleViewStatus').textContent = 'Error: ' + d.error; return; }
     _jimpleAllFiles = d.files || [];
-    document.getElementById('jimpleViewStatus').textContent = _jimpleAllFiles.length + ' .jimple file(s) found';
     document.getElementById('jimpleFileSearch').value = '';
     document.getElementById('jimpleFileList').style.display = 'block';
     jimpleRenderFileList(_jimpleAllFiles);
+    // Batch-load all file contents into _jimpleCfgSources so the AI chat can see them
+    var statusEl = document.getElementById('jimpleViewStatus');
+    statusEl.textContent = _jimpleAllFiles.length + ' .jimple file(s) found — loading for AI chat…';
+    var BATCH = 10, idx = 0;
+    function fetchViewBatch() {
+      if (idx >= _jimpleAllFiles.length) {
+        statusEl.textContent = _jimpleAllFiles.length + ' .jimple file(s) found';
+        return;
+      }
+      var batch = _jimpleAllFiles.slice(idx, idx + BATCH);
+      idx += BATCH;
+      statusEl.textContent = _jimpleAllFiles.length + ' .jimple file(s) found — loading for AI chat (' + Math.min(idx, _jimpleAllFiles.length) + '/' + _jimpleAllFiles.length + ')…';
+      Promise.all(batch.map(function(f) {
+        return fetch('/api/soot/read-jimple', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folderPath: dir, className: f.name })
+        }).then(function(r){ return r.json(); }).then(function(data){ return { name: f.name, content: data.content || '' }; })
+        .catch(function(){ return { name: f.name, content: '' }; });
+      })).then(function(results) {
+        results.forEach(function(r) {
+          if (!r.content) return;
+          var parsed = jimpleParseCfg(r.content);
+          Object.keys(parsed).forEach(function(sig) {
+            _jimpleCfgMethods[sig] = parsed[sig];
+            _jimpleCfgSources[sig] = r.content;
+          });
+          // If no methods parsed, still store the raw source keyed by filename
+          if (!Object.keys(parsed).length) {
+            _jimpleCfgSources['__file__' + r.name] = r.content;
+          }
+        });
+        fetchViewBatch();
+      });
+    }
+    fetchViewBatch();
   })
   .catch(function(e){ document.getElementById('jimpleViewStatus').textContent = 'Error: ' + e.message; });
 }
@@ -3403,6 +3566,17 @@ function jimpleLoadFile(name) {
     document.getElementById('jimpleCodeView').innerHTML = jimpleHighlight(_jimpleCurrentCode);
     document.getElementById('jimpleCodeWrap').style.display = 'block';
     document.getElementById('jimpleViewStatus').textContent = '';
+    // Ensure this file is also available in the AI chat context
+    if (_jimpleCurrentCode) {
+      var parsed = jimpleParseCfg(_jimpleCurrentCode);
+      Object.keys(parsed).forEach(function(sig) {
+        _jimpleCfgMethods[sig] = parsed[sig];
+        _jimpleCfgSources[sig] = _jimpleCurrentCode;
+      });
+      if (!Object.keys(parsed).length) {
+        _jimpleCfgSources['__file__' + name] = _jimpleCurrentCode;
+      }
+    }
   })
   .catch(function(e){ document.getElementById('jimpleViewStatus').textContent = 'Error: ' + e.message; });
 }
@@ -3450,6 +3624,963 @@ function jimpleHighlightLine(line) {
 
 function escapeHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Jimple CFG Visualization ──────────────────────────────────────────────────
+
+var _jimpleCfgMethods = {};   // { methodSig: [ {id, stmts[], succs:[{id,label}]} ] }
+var _jimpleCfgSources = {};   // { methodSig: rawJimpleText }
+var _jimpleCfgZoom = 1.0;
+var _jimpleCfgPan  = { x: 20, y: 20 };
+var _jimpleCfgDrag = null;
+
+// Populate CFG panel from all jimple files in the given output directory
+function jimpleBuildCfgFromDir(outputDir) {
+  if (!outputDir) return;
+  document.getElementById('jimpleCfgStatus').textContent = 'Loading CFGs…';
+  document.getElementById('jimpleCfgPanel').style.display = 'block';
+  document.getElementById('jimpleCfgRoot').innerHTML = '';
+  jimpleCfgSetupPanZoom();
+
+  fetch('/api/soot/list-jimple', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath: outputDir })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    var files = d.files || [];
+    if (!files.length) {
+      document.getElementById('jimpleCfgStatus').textContent = 'No .jimple files found in output directory.';
+      return;
+    }
+    // Fetch files in batches of 10 to avoid ERR_INSUFFICIENT_RESOURCES
+    _jimpleCfgMethods = {};
+    _jimpleCfgSources = {};
+    var statusEl = document.getElementById('jimpleCfgStatus');
+    var BATCH = 10;
+    var idx = 0;
+    function fetchBatch() {
+      if (idx >= files.length) {
+        // Done — populate dropdown
+        var sigs = Object.keys(_jimpleCfgMethods).sort();
+        var sel = document.getElementById('jimpleCfgMethodSelect');
+        sel.innerHTML = '';
+        if (!sigs.length) {
+          statusEl.textContent = 'No methods with control flow found.';
+          return;
+        }
+        sigs.forEach(function(s) {
+          var opt = document.createElement('option');
+          opt.value = s;
+          opt.textContent = s;
+          sel.appendChild(opt);
+        });
+        _jimpleCfgZoom = 1.0;
+        _jimpleCfgPan  = { x: 20, y: 20 };
+        statusEl.textContent = sigs.length + ' method(s) found across ' + files.length + ' class(es)';
+        jimpleRenderSelectedCfg();
+        return;
+      }
+      var batch = files.slice(idx, idx + BATCH);
+      idx += BATCH;
+      statusEl.textContent = 'Loading CFGs… (' + Math.min(idx, files.length) + '/' + files.length + ')';
+      Promise.all(batch.map(function(f) {
+        return fetch('/api/soot/read-jimple', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folderPath: outputDir, className: f.name })
+        }).then(function(r) { return r.json(); }).then(function(data) {
+          return data.content || '';
+        }).catch(function() { return ''; });
+      })).then(function(contents) {
+        contents.forEach(function(content) {
+          if (!content) return;
+          var parsed = jimpleParseCfg(content);
+          Object.keys(parsed).forEach(function(sig) {
+            _jimpleCfgMethods[sig] = parsed[sig];
+            _jimpleCfgSources[sig] = content;
+          });
+        });
+        fetchBatch();
+      });
+    }
+    fetchBatch();
+  })
+  .catch(function(e) {
+    document.getElementById('jimpleCfgStatus').textContent = 'Error: ' + e.message;
+  });
+}
+
+function jimpleRenderSelectedCfg() {
+  var sig = document.getElementById('jimpleCfgMethodSelect').value;
+  if (!sig || !_jimpleCfgMethods[sig]) return;
+  _jimpleCfgZoom = 1.0;
+  _jimpleCfgPan  = { x: 0, y: 0 };
+  jimpleDrawCfg(_jimpleCfgMethods[sig], sig);
+}
+
+// ── CFG parser ────────────────────────────────────────────────────────────────
+// Parses Jimple source into basic blocks with successor edges.
+function jimpleParseCfg(src) {
+  var result = {};
+  var methodBodies = jimpleExtractMethods(src);
+  methodBodies.forEach(function(mb) {
+    var blocks = jimpleBuildBlocks(mb.body);
+    if (blocks.length > 0) result[mb.sig] = blocks;
+  });
+  return result;
+}
+
+function jimpleExtractMethods(src) {
+  var results = [];
+  var lines = src.split('\\n');
+  // State machine: find lines inside a class body
+  var inClass = false, classDepth = 0;
+  var inMethod = false, methodDepth = 0, methodSig = '', bodyLines = [];
+
+  for (var i = 0; i < lines.length; i++) {
+    var raw = lines[i];
+    var trimmed = raw.trim();
+    var opens = (raw.split('{').length - 1);
+    var closes = (raw.split('}').length - 1);
+
+    if (!inClass) {
+      if (opens > 0) { inClass = true; classDepth = opens - closes; }
+      continue;
+    }
+
+    if (!inMethod) {
+      classDepth += opens - closes;
+      if (classDepth <= 0) { inClass = false; continue; }
+      // detect method opening: line ends with { or next non-blank does, and line looks like a method decl
+      var _cfgParen = trimmed.indexOf('(');
+      var _cfgFirstWord = _cfgParen >= 0 ? trimmed.slice(0, _cfgParen).trim().split(' ').pop() : '';
+      var _cfgCtrlKw = { 'if':1,'for':1,'while':1,'switch':1,'catch':1,'try':1 };
+      var isMethodDecl = opens > 0 && raw.indexOf('(') >= 0 && !_cfgCtrlKw[_cfgFirstWord] && trimmed.indexOf('//') !== 0 && trimmed !== '{';
+      if (isMethodDecl && opens > 0) {
+        // signature = trim off the {
+        var _braceIdx = trimmed.indexOf('{');
+        methodSig = (_braceIdx >= 0 ? trimmed.slice(0, _braceIdx) : trimmed).trim();
+        inMethod = true;
+        methodDepth = opens - closes;
+        bodyLines = [];
+        // if depth already back to 0 on same line (empty method), close now
+        if (methodDepth <= 0) {
+          results.push({ sig: methodSig, body: bodyLines });
+          inMethod = false;
+          methodDepth = 0;
+        }
+      }
+    } else {
+      methodDepth += opens - closes;
+      if (methodDepth <= 0) {
+        results.push({ sig: methodSig, body: bodyLines });
+        inMethod = false;
+        methodDepth = 0;
+        classDepth -= (closes - opens); // already counted above; re-adjust
+      } else {
+        bodyLines.push(raw);
+      }
+    }
+  }
+  return results;
+}
+
+// Extract a word token starting at position 0 of s (alphanumeric + _$)
+function _cfgWord(s) {
+  var end = 0;
+  while (end < s.length && /[a-zA-Z0-9_$]/.test(s[end])) end++;
+  return s.slice(0, end);
+}
+
+function jimpleBuildBlocks(bodyLines) {
+  if (!bodyLines || !bodyLines.length) return [];
+
+  // Pre-scan labels
+  var labels = {};
+  bodyLines.forEach(function(l, i) {
+    var t = l.trim();
+    // label: word followed by colon, nothing else
+    if (t.slice(-1) === ':' && t.indexOf(' ') < 0 && t.indexOf('(') < 0) {
+      labels[t.slice(0, -1)] = i;
+    }
+  });
+
+  var blocks = [];
+  var cur = null;
+  function newBlock(id) { cur = { id: id, stmts: [], succs: [] }; blocks.push(cur); }
+  newBlock(0);
+
+  for (var i = 0; i < bodyLines.length; i++) {
+    var line = bodyLines[i].trim();
+    if (!line) continue;
+
+    // Label line: ends with ':' and has no spaces or parens
+    if (line.slice(-1) === ':' && line.indexOf(' ') < 0 && line.indexOf('(') < 0) {
+      var lname = line.slice(0, -1);
+      var lid = 'L' + lname;
+      if (cur && cur.stmts.length > 0) cur.succs.push({ id: lid, label: '' });
+      newBlock(lid);
+      labels[lname] = lid;
+      continue;
+    }
+
+    cur.stmts.push(line);
+
+    // goto <label>;
+    if (line.indexOf('goto ') === 0) {
+      var gTarget = line.slice(5).replace(';', '').trim();
+      cur.succs.push({ id: 'L' + gTarget, label: 'goto' });
+      newBlock(blocks.length);
+      continue;
+    }
+
+    // if <cond> goto <label>;
+    if (line.indexOf('if ') === 0) {
+      var gotoIdx = line.lastIndexOf(' goto ');
+      if (gotoIdx >= 0) {
+        var ifTarget = line.slice(gotoIdx + 6).replace(';', '').trim();
+        cur.succs.push({ id: 'L' + ifTarget, label: 'true' });
+        var nextId = blocks.length;
+        cur.succs.push({ id: nextId, label: 'false' });
+        newBlock(nextId);
+        continue;
+      }
+    }
+
+    // return / throw
+    var firstWord = _cfgWord(line);
+    if (firstWord === 'return' || firstWord === 'throw') {
+      newBlock(blocks.length);
+      continue;
+    }
+
+    // tableswitch / lookupswitch
+    if (firstWord === 'tableswitch' || firstWord === 'lookupswitch') {
+      var j = i + 1;
+      while (j < bodyLines.length && bodyLines[j].trim() !== '}') {
+        var ct = bodyLines[j].trim();
+        var gotoPos = ct.indexOf(' goto ');
+        if (gotoPos >= 0 && (ct.indexOf('case ') === 0 || ct.indexOf('default') === 0)) {
+          var cLabel = ct.slice(gotoPos + 6).replace(';', '').trim();
+          var cName  = ct.slice(0, gotoPos).replace('case ', '').replace(':', '').trim();
+          cur.succs.push({ id: 'L' + cLabel, label: cName });
+        }
+        j++;
+      }
+      i = j;
+      newBlock(blocks.length);
+      continue;
+    }
+  }
+
+  if (cur && cur.stmts.length === 0 && cur.succs.length === 0 && blocks.length > 1) {
+    blocks.pop();
+  }
+  return blocks;
+}
+
+// ── CFG renderer (SVG hierarchical layout) ────────────────────────────────────
+var _jimpleCfgNodeW = 220;
+var _jimpleCfgNodeH_base = 22; // per statement line
+var _jimpleCfgNodePad = 8;
+var _jimpleCfgLevelGap = 70;
+var _jimpleCfgSibGap  = 30;
+
+function jimpleDrawCfg(blocks, sig) {
+  var svg  = document.getElementById('jimpleCfgSvg');
+  var root = document.getElementById('jimpleCfgRoot');
+  root.innerHTML = '';
+  if (!blocks || !blocks.length) {
+    document.getElementById('jimpleCfgStatus').textContent = 'No blocks to render.';
+    return;
+  }
+  document.getElementById('jimpleCfgStatus').textContent = sig + ' — ' + blocks.length + ' basic block(s)';
+
+  // Assign layout positions via simple layered layout
+  var nodeW = _jimpleCfgNodeW;
+  var positions = jimpleCfgLayout(blocks, nodeW);
+
+  // Compute bounding box and normalize positions to origin (0,0)
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  blocks.forEach(function(b) {
+    var p = positions[b.id];
+    if (!p) return;
+    var h = jimpleCfgNodeHeight(b);
+    if (p.x         < minX) minX = p.x;
+    if (p.y         < minY) minY = p.y;
+    if (p.x + nodeW > maxX) maxX = p.x + nodeW;
+    if (p.y + h     > maxY) maxY = p.y + h;
+  });
+  // Shift all positions so content starts at (0,0)
+  blocks.forEach(function(b) {
+    if (positions[b.id]) { positions[b.id].x -= minX; positions[b.id].y -= minY; }
+  });
+  var contentW = maxX - minX;
+  var contentH = maxY - minY;
+  var PAD = 20;
+  var svgW = contentW + PAD * 2;
+  var svgH = contentH + PAD * 2;
+  // Shift positions by padding
+  blocks.forEach(function(b) {
+    if (positions[b.id]) { positions[b.id].x += PAD; positions[b.id].y += PAD; }
+  });
+  var fitW = svgW;
+  var fitH = svgH;
+
+  // Draw edges first (so nodes render on top)
+  var edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  root.appendChild(edgeGroup);
+  var nodeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  root.appendChild(nodeGroup);
+
+  // Build id → block map
+  var bmap = {};
+  blocks.forEach(function(b) { bmap[b.id] = b; });
+
+  blocks.forEach(function(b) {
+    var sp = positions[b.id];
+    if (!sp) return;
+    var sh = jimpleCfgNodeHeight(b);
+    var sx = sp.x + nodeW / 2;
+    var sy_bottom = sp.y + sh;
+
+    b.succs.forEach(function(succ) {
+      var tp = positions[succ.id];
+      if (!tp) return;
+      var tb = bmap[succ.id];
+      var th = tb ? jimpleCfgNodeHeight(tb) : 0;
+      var tx = tp.x + nodeW / 2;
+      var ty_top = tp.y;
+
+      var color = succ.label === 'true' || succ.label === 'goto' ? '#10b981'
+                : succ.label === 'false' ? '#ef4444'
+                : '#64748b';
+      var markerId = succ.label === 'true' || succ.label === 'goto' ? 'cfgArrowTrue'
+                   : succ.label === 'false' ? 'cfgArrowFalse'
+                   : 'cfgArrow';
+
+      // Draw bezier curve edge
+      var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+      // back-edge detection (target is above source)
+      var isBack = ty_top < sp.y;
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      var d;
+      if (isBack) {
+        // Route around the side
+        var sideX = sp.x - 28;
+        d = 'M ' + sx + ' ' + sy_bottom +
+            ' C ' + sx + ' ' + (sy_bottom + 20) + ' ' + sideX + ' ' + (sy_bottom + 20) + ' ' + sideX + ' ' + ((sy_bottom + ty_top) / 2) +
+            ' S ' + sideX + ' ' + (ty_top - 20) + ' ' + tx + ' ' + ty_top;
+      } else {
+        var cy1 = sy_bottom + _jimpleCfgLevelGap * 0.4;
+        var cy2 = ty_top    - _jimpleCfgLevelGap * 0.4;
+        d = 'M ' + sx + ' ' + sy_bottom + ' C ' + sx + ' ' + cy1 + ' ' + tx + ' ' + cy2 + ' ' + tx + ' ' + ty_top;
+      }
+      path.setAttribute('d', d);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', color);
+      path.setAttribute('stroke-width', '1.5');
+      path.setAttribute('marker-end', 'url(#' + markerId + ')');
+      g.appendChild(path);
+
+      // Edge label
+      if (succ.label && succ.label !== 'goto') {
+        var mx = (sx + tx) / 2;
+        var my = (sy_bottom + ty_top) / 2;
+        var lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('x', mx + 4);
+        lbl.setAttribute('y', my);
+        lbl.setAttribute('font-size', '10');
+        lbl.setAttribute('fill', color);
+        lbl.setAttribute('font-family', 'monospace');
+        lbl.textContent = succ.label;
+        g.appendChild(lbl);
+      }
+      edgeGroup.appendChild(g);
+    });
+  });
+
+  // Draw nodes
+  blocks.forEach(function(b) {
+    var p = positions[b.id];
+    if (!p) return;
+    var h = jimpleCfgNodeHeight(b);
+    var isEntry  = b.id === blocks[0].id;
+    var isExit   = b.succs.length === 0;
+    var fillColor   = isEntry ? 'rgba(16,185,129,0.18)' : isExit ? 'rgba(239,68,68,0.15)' : 'rgba(30,41,59,0.92)';
+    var strokeColor = isEntry ? '#10b981' : isExit ? '#ef4444' : '#334155';
+
+    var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+    var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', p.x);
+    rect.setAttribute('y', p.y);
+    rect.setAttribute('width',  nodeW);
+    rect.setAttribute('height', h);
+    rect.setAttribute('rx', '6');
+    rect.setAttribute('fill',   fillColor);
+    rect.setAttribute('stroke', strokeColor);
+    rect.setAttribute('stroke-width', '1.5');
+    g.appendChild(rect);
+
+    // Block id label (header)
+    var idStr = String(b.id);
+    var idTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    idTxt.setAttribute('x', p.x + _jimpleCfgNodePad);
+    idTxt.setAttribute('y', p.y + 14);
+    idTxt.setAttribute('font-size', '10');
+    idTxt.setAttribute('font-weight', 'bold');
+    idTxt.setAttribute('fill', isEntry ? '#10b981' : isExit ? '#f87171' : '#94a3b8');
+    idTxt.setAttribute('font-family', 'monospace');
+    idTxt.textContent = (isEntry ? '▶ ' : isExit ? '■ ' : '') + idStr;
+    g.appendChild(idTxt);
+
+    // Separator line
+    var sep = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    sep.setAttribute('x1', p.x);
+    sep.setAttribute('y1', p.y + 20);
+    sep.setAttribute('x2', p.x + nodeW);
+    sep.setAttribute('y2', p.y + 20);
+    sep.setAttribute('stroke', strokeColor);
+    sep.setAttribute('stroke-width', '0.5');
+    g.appendChild(sep);
+
+    // Statement lines — truncated to fit
+    var maxChars = Math.floor((nodeW - _jimpleCfgNodePad * 2) / 6.2);
+    b.stmts.forEach(function(stmt, si) {
+      var txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      txt.setAttribute('x', p.x + _jimpleCfgNodePad);
+      txt.setAttribute('y', p.y + 20 + _jimpleCfgNodePad + (si + 1) * 13);
+      txt.setAttribute('font-size', '9.5');
+      txt.setAttribute('fill', '#cbd5e1');
+      txt.setAttribute('font-family', 'monospace');
+      var display = stmt.length > maxChars ? stmt.slice(0, maxChars - 1) + '…' : stmt;
+      txt.textContent = display;
+      // Tooltip for full text
+      var title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = stmt;
+      txt.appendChild(title);
+      g.appendChild(txt);
+    });
+
+    nodeGroup.appendChild(g);
+  });
+
+  // Store for fullscreen reuse
+  _jimpleCfgFsContentW = fitW; _jimpleCfgFsContentH = fitH;
+  _jimpleCfgFsOriginX  = 0;    _jimpleCfgFsOriginY  = 0;
+  // Fit normalized content into the viewport
+  jimpleCfgFit(fitW, fitH, 0, 0);
+}
+
+function jimpleCfgFit(contentW, contentH) {
+  requestAnimationFrame(function() {
+    var vp = document.getElementById('jimpleCfgViewport');
+    if (!vp) return;
+    var vpW = vp.clientWidth  || 900;
+    var vpH = vp.clientHeight || 580;
+    if (vpW < 10 || vpH < 10) return;
+    var scaleX = vpW / contentW;
+    var scaleY = vpH / contentH;
+    _jimpleCfgZoom = Math.max(0.05, Math.min(scaleX, scaleY, 3.0));
+    _jimpleCfgPan.x = (vpW - contentW * _jimpleCfgZoom) / 2;
+    _jimpleCfgPan.y = (vpH - contentH * _jimpleCfgZoom) / 2;
+    jimpleCfgApplyTransform();
+  });
+}
+
+function jimpleCfgNodeHeight(b) {
+  return 20 + _jimpleCfgNodePad + (b.stmts.length || 1) * 13 + _jimpleCfgNodePad;
+}
+
+// Simple top-down layered layout using BFS levels
+function jimpleCfgLayout(blocks, nodeW) {
+  if (!blocks.length) return {};
+  var bmap = {};
+  blocks.forEach(function(b) { bmap[b.id] = b; });
+
+  // BFS from entry to assign levels
+  var levels = {};
+  var visited = {};
+  var queue = [{ id: blocks[0].id, level: 0 }];
+  visited[blocks[0].id] = true;
+  var maxLevel = 0;
+
+  while (queue.length) {
+    var item = queue.shift();
+    levels[item.id] = item.level;
+    if (item.level > maxLevel) maxLevel = item.level;
+    var b = bmap[item.id];
+    if (b) {
+      b.succs.forEach(function(s) {
+        if (!visited[s.id] && bmap[s.id]) {
+          visited[s.id] = true;
+          queue.push({ id: s.id, level: item.level + 1 });
+        }
+      });
+    }
+  }
+
+  // Any unreached blocks get placed at the end
+  blocks.forEach(function(b) {
+    if (levels[b.id] === undefined) { maxLevel++; levels[b.id] = maxLevel; }
+  });
+
+  // Group by level
+  var byLevel = {};
+  blocks.forEach(function(b) {
+    var lv = levels[b.id];
+    if (!byLevel[lv]) byLevel[lv] = [];
+    byLevel[lv].push(b.id);
+  });
+
+  // Assign x positions by centering each level
+  var positions = {};
+  var yOffset = 20;
+  var sibGap = _jimpleCfgSibGap;
+  var levelGap = _jimpleCfgLevelGap;
+
+  // Compute cumulative y per level (needs node heights)
+  var levelY = {};
+  var curY = yOffset;
+  for (var lv = 0; lv <= maxLevel; lv++) {
+    levelY[lv] = curY;
+    var ids = byLevel[lv] || [];
+    var maxH = 0;
+    ids.forEach(function(id) {
+      var b = bmap[id];
+      if (b) { var h = jimpleCfgNodeHeight(b); if (h > maxH) maxH = h; }
+    });
+    curY += maxH + levelGap;
+  }
+
+  // Find the widest level to determine canvas width
+  var maxNodesInLevel = 0;
+  for (var lv2 = 0; lv2 <= maxLevel; lv2++) {
+    var cnt = (byLevel[lv2] || []).length;
+    if (cnt > maxNodesInLevel) maxNodesInLevel = cnt;
+  }
+  var canvasW = Math.max(maxNodesInLevel * (nodeW + sibGap) - sibGap + 40, nodeW + 40);
+
+  // Assign x: center each level within canvasW
+  for (var lv3 = 0; lv3 <= maxLevel; lv3++) {
+    var ids3 = byLevel[lv3] || [];
+    var rowW = ids3.length * nodeW + (ids3.length - 1) * sibGap;
+    var startX = (canvasW - rowW) / 2;
+    ids3.forEach(function(id, idx) {
+      positions[id] = {
+        x: startX + idx * (nodeW + sibGap),
+        y: levelY[lv3]
+      };
+    });
+  }
+
+  return positions;
+}
+
+// ── CFG pan/zoom ──────────────────────────────────────────────────────────────
+var _jimpleCfgFsZoom = 1.0;
+var _jimpleCfgFsPan  = { x: 0, y: 0 };
+var _jimpleCfgFsDrag = null;
+var _jimpleCfgFsContentW = 0, _jimpleCfgFsContentH = 0, _jimpleCfgFsOriginX = 0, _jimpleCfgFsOriginY = 0;
+
+function jimpleCfgApplyTransform(fs) {
+  if (fs) {
+    var root = document.getElementById('jimpleCfgFsRoot');
+    if (root) root.setAttribute('transform', 'translate(' + _jimpleCfgFsPan.x + ',' + _jimpleCfgFsPan.y + ') scale(' + _jimpleCfgFsZoom + ')');
+  } else {
+    var root2 = document.getElementById('jimpleCfgRoot');
+    if (root2) root2.setAttribute('transform', 'translate(' + _jimpleCfgPan.x + ',' + _jimpleCfgPan.y + ') scale(' + _jimpleCfgZoom + ')');
+  }
+}
+
+function jimpleCfgZoomIn(fs)  {
+  if (fs) { _jimpleCfgFsZoom = Math.min(4.0, _jimpleCfgFsZoom * 1.2); jimpleCfgApplyTransform(true); }
+  else    { _jimpleCfgZoom   = Math.min(4.0, _jimpleCfgZoom   * 1.2); jimpleCfgApplyTransform(); }
+}
+function jimpleCfgZoomOut(fs) {
+  if (fs) { _jimpleCfgFsZoom = Math.max(0.05, _jimpleCfgFsZoom / 1.2); jimpleCfgApplyTransform(true); }
+  else    { _jimpleCfgZoom   = Math.max(0.05, _jimpleCfgZoom   / 1.2); jimpleCfgApplyTransform(); }
+}
+function jimpleCfgReset(fs) {
+  if (fs) { jimpleCfgFitFs(); }
+  else    { jimpleRenderSelectedCfg(); }
+}
+
+function jimpleCfgFitFs() {
+  requestAnimationFrame(function() {
+    var vp = document.getElementById('jimpleCfgFsViewport');
+    if (!vp) return;
+    var vpW = vp.clientWidth  || window.innerWidth;
+    var vpH = vp.clientHeight || window.innerHeight - 50;
+    if (vpW < 10 || vpH < 10) return;
+    var scaleX = vpW / _jimpleCfgFsContentW;
+    var scaleY = vpH / _jimpleCfgFsContentH;
+    _jimpleCfgFsZoom = Math.max(0.05, Math.min(scaleX, scaleY, 3.0));
+    _jimpleCfgFsPan.x = (vpW - _jimpleCfgFsContentW * _jimpleCfgFsZoom) / 2;
+    _jimpleCfgFsPan.y = (vpH - _jimpleCfgFsContentH * _jimpleCfgFsZoom) / 2;
+    jimpleCfgApplyTransform(true);
+  });
+}
+
+function jimpleCfgFullscreen() {
+  var sig = document.getElementById('jimpleCfgMethodSelect').value;
+  if (!sig || !_jimpleCfgMethods[sig]) return;
+  var modal = document.getElementById('jimpleCfgFsModal');
+  modal.style.display = 'flex';
+  document.getElementById('jimpleCfgFsTitle').textContent = sig;
+  // Clone the SVG content into the fullscreen svg
+  var srcRoot = document.getElementById('jimpleCfgRoot');
+  var srcSvg  = document.getElementById('jimpleCfgSvg');
+  var dstRoot = document.getElementById('jimpleCfgFsRoot');
+  var dstSvg  = document.getElementById('jimpleCfgFsSvg');
+  dstRoot.innerHTML = srcRoot.innerHTML;
+  // Update marker references in cloned content to use fullscreen marker ids
+  dstRoot.innerHTML = dstRoot.innerHTML
+    .split('url(#cfgArrowTrue)').join('url(#cfgArrowTrueFs)')
+    .split('url(#cfgArrowFalse)').join('url(#cfgArrowFalseFs)')
+    .split('url(#cfgArrow)').join('url(#cfgArrowFs)');
+  jimpleCfgFitFs();
+  jimpleCfgSetupPanZoom(true);
+}
+
+function jimpleCfgCloseFullscreen() {
+  document.getElementById('jimpleCfgFsModal').style.display = 'none';
+}
+
+// Allow Escape to close fullscreen
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') jimpleCfgCloseFullscreen();
+});
+
+function jimpleCfgSetupPanZoom(fs) {
+  var vpId = fs ? 'jimpleCfgFsViewport' : 'jimpleCfgViewport';
+  var vp = document.getElementById(vpId);
+  if (!vp || vp._cfgBound) return;
+  vp._cfgBound = true;
+
+  vp.addEventListener('mousedown', function(e) {
+    var pan = fs ? _jimpleCfgFsPan : _jimpleCfgPan;
+    _jimpleCfgDrag = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y, fs: !!fs };
+    vp.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', function(e) {
+    if (!_jimpleCfgDrag || _jimpleCfgDrag.fs !== !!fs) return;
+    var pan = fs ? _jimpleCfgFsPan : _jimpleCfgPan;
+    pan.x = _jimpleCfgDrag.px + (e.clientX - _jimpleCfgDrag.sx);
+    pan.y = _jimpleCfgDrag.py + (e.clientY - _jimpleCfgDrag.sy);
+    jimpleCfgApplyTransform(fs);
+  });
+  window.addEventListener('mouseup', function() {
+    if (_jimpleCfgDrag && _jimpleCfgDrag.fs === !!fs) { _jimpleCfgDrag = null; vp.style.cursor = 'grab'; }
+  });
+  vp.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    var factor = e.deltaY < 0 ? 1.1 : 0.9;
+    if (fs) { _jimpleCfgFsZoom = Math.max(0.05, Math.min(4.0, _jimpleCfgFsZoom * factor)); jimpleCfgApplyTransform(true); }
+    else    { _jimpleCfgZoom   = Math.max(0.05, Math.min(4.0, _jimpleCfgZoom   * factor)); jimpleCfgApplyTransform(); }
+  }, { passive: false });
+}
+
+// ── CFG AI Chat ───────────────────────────────────────────────────────────────
+
+var _cfgChatHistory  = [];
+var _cfgChatStreaming = false;
+var _cfgChatTab      = 'cfg';          // 'cfg' | 'class'
+// Sets of checked keys (method sigs for cfg tab, deduplicated source keys for class tab)
+var _cfgChatCheckedCfg   = {};         // { sig: true }
+var _cfgChatCheckedClass = {};         // { classKey: true }  classKey = first sig sharing that source
+
+// Derive unique class keys (one per distinct source blob)
+function _cfgChatClassKeys() {
+  var seen = [];   // [source string]
+  var keys = [];   // [representative sig]
+  Object.keys(_jimpleCfgSources).sort().forEach(function(sig) {
+    var src = _jimpleCfgSources[sig];
+    if (seen.indexOf(src) < 0) { seen.push(src); keys.push(sig); }
+  });
+  return keys;
+}
+
+// Friendly display name for a class key.
+// Jimple method sigs from Soot look like: "<com.example.Foo: void method(...)>"
+// __file__ClassName.jimple keys come from files with no parseable methods.
+function _cfgChatClassName(sig) {
+  // Files stored with __file__ prefix
+  if (sig.indexOf('__file__') === 0) return sig.slice(8);
+  // Soot-style "<ClassName: ...>"
+  var angleStart = sig.indexOf('<');
+  var colon = sig.indexOf(':');
+  if (angleStart >= 0 && colon > angleStart) {
+    return sig.slice(angleStart + 1, colon).trim();
+  }
+  // Fallback: "returnType qualifiedClass.method(args)"
+  var parts = sig.split(' ');
+  var qualName = parts.length >= 2 ? parts[1] : parts[0];
+  var parenIdx = qualName.indexOf('(');
+  if (parenIdx >= 0) qualName = qualName.slice(0, parenIdx);
+  var dotIdx = qualName.lastIndexOf('.');
+  return dotIdx >= 0 ? qualName.slice(0, dotIdx) : qualName;
+}
+
+function jimpleCfgOpenChat() {
+  var modal = document.getElementById('jimpleCfgChatModal');
+  modal.style.display = 'flex';
+  // Pre-select currently viewed CFG method
+  var sig = document.getElementById('jimpleCfgMethodSelect').value;
+  if (sig) { _cfgChatCheckedCfg[sig] = true; }
+  _jimpleCfgChatRebuildLists();
+  document.getElementById('jimpleCfgChatInput').focus();
+}
+
+function jimpleCfgCloseChat() {
+  document.getElementById('jimpleCfgChatModal').style.display = 'none';
+}
+
+function jimpleCfgChatSwitchTab(tab) {
+  _cfgChatTab = tab;
+  document.getElementById('jimpleCfgChatListCfg').style.display   = tab === 'cfg'   ? '' : 'none';
+  document.getElementById('jimpleCfgChatListClass').style.display  = tab === 'class' ? '' : 'none';
+  var cfgBtn   = document.getElementById('jimpleCfgChatTabCfg');
+  var classBtn = document.getElementById('jimpleCfgChatTabClass');
+  cfgBtn.style.borderBottomColor   = tab === 'cfg'   ? 'var(--accent-no-ads)' : 'transparent';
+  cfgBtn.style.color               = tab === 'cfg'   ? 'var(--text)' : 'var(--text-muted)';
+  cfgBtn.style.fontWeight          = tab === 'cfg'   ? '600' : 'normal';
+  classBtn.style.borderBottomColor = tab === 'class' ? 'var(--accent-no-ads)' : 'transparent';
+  classBtn.style.color             = tab === 'class' ? 'var(--text)' : 'var(--text-muted)';
+  classBtn.style.fontWeight        = tab === 'class' ? '600' : 'normal';
+}
+
+function _jimpleCfgChatRebuildLists() {
+  var filter = (document.getElementById('jimpleCfgChatFilter').value || '').toLowerCase();
+
+  // ── CFG method list ──
+  var cfgList = document.getElementById('jimpleCfgChatListCfg');
+  cfgList.innerHTML = '';
+  var cfgSigs = Object.keys(_jimpleCfgMethods).sort();
+  cfgSigs.forEach(function(sig) {
+    if (filter && sig.toLowerCase().indexOf(filter) < 0) return;
+    var row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:7px;padding:4px 12px;cursor:pointer;font-size:.72rem;color:var(--text);';
+    row.title = sig;
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.cssText = 'margin-top:2px;flex-shrink:0;accent-color:var(--accent-no-ads);';
+    cb.checked = !!_cfgChatCheckedCfg[sig];
+    cb.onchange = function() {
+      if (cb.checked) _cfgChatCheckedCfg[sig] = true;
+      else delete _cfgChatCheckedCfg[sig];
+      _jimpleCfgChatUpdateCount();
+    };
+    var txt = document.createElement('span');
+    txt.style.cssText = 'word-break:break-all;overflow-wrap:anywhere;white-space:normal;min-width:0;';
+    txt.textContent = sig;
+    row.appendChild(cb);
+    row.appendChild(txt);
+    cfgList.appendChild(row);
+  });
+  if (!cfgList.children.length) {
+    cfgList.innerHTML = '<div style="padding:10px 12px;font-size:.72rem;color:var(--text-muted);">No CFG methods loaded yet.</div>';
+  }
+
+  // ── Class list ──
+  var classList = document.getElementById('jimpleCfgChatListClass');
+  classList.innerHTML = '';
+  var classKeys = _cfgChatClassKeys();
+  classKeys.forEach(function(key) {
+    var name = _cfgChatClassName(key);
+    if (filter && name.toLowerCase().indexOf(filter) < 0) return;
+    var row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:7px;padding:4px 12px;cursor:pointer;font-size:.72rem;color:var(--text);';
+    row.title = name;
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.cssText = 'margin-top:2px;flex-shrink:0;accent-color:var(--accent-no-ads);';
+    cb.checked = !!_cfgChatCheckedClass[key];
+    cb.onchange = function() {
+      if (cb.checked) _cfgChatCheckedClass[key] = true;
+      else delete _cfgChatCheckedClass[key];
+      _jimpleCfgChatUpdateCount();
+    };
+    var txt = document.createElement('span');
+    txt.style.cssText = 'word-break:break-all;overflow-wrap:anywhere;white-space:normal;min-width:0;';
+    txt.textContent = name;
+    row.appendChild(cb);
+    row.appendChild(txt);
+    classList.appendChild(row);
+  });
+  if (!classList.children.length) {
+    classList.innerHTML = '<div style="padding:10px 12px;font-size:.72rem;color:var(--text-muted);">No classes loaded yet.</div>';
+  }
+
+  _jimpleCfgChatUpdateCount();
+}
+
+function _jimpleCfgChatUpdateCount() {
+  var cfgN   = Object.keys(_cfgChatCheckedCfg).length;
+  var classN = Object.keys(_cfgChatCheckedClass).length;
+  var parts = [];
+  if (cfgN)   parts.push(cfgN + ' method' + (cfgN > 1 ? 's' : ''));
+  if (classN) parts.push(classN + ' class' + (classN > 1 ? 'es' : ''));
+  document.getElementById('jimpleCfgChatSelCount').textContent =
+    parts.length ? parts.join(' + ') + ' selected' : 'Nothing selected — chat will have no code context';
+}
+
+function jimpleCfgChatFilterList() {
+  _jimpleCfgChatRebuildLists();
+  // Re-apply tab visibility
+  jimpleCfgChatSwitchTab(_cfgChatTab);
+}
+
+function jimpleCfgChatSelectAll(on) {
+  if (_cfgChatTab === 'cfg') {
+    Object.keys(_jimpleCfgMethods).forEach(function(sig) {
+      if (on) _cfgChatCheckedCfg[sig] = true; else delete _cfgChatCheckedCfg[sig];
+    });
+  } else {
+    _cfgChatClassKeys().forEach(function(key) {
+      if (on) _cfgChatCheckedClass[key] = true; else delete _cfgChatCheckedClass[key];
+    });
+  }
+  _jimpleCfgChatRebuildLists();
+  jimpleCfgChatSwitchTab(_cfgChatTab);
+}
+
+function jimpleCfgChatClear() {
+  _cfgChatHistory = [];
+  document.getElementById('jimpleCfgChatMessages').innerHTML = '';
+}
+
+function jimpleCfgChatKeydown(ev) {
+  if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); jimpleCfgChatSend(); }
+}
+
+// Build the context block from checked selections
+function _jimpleCfgChatBuildContext() {
+  var parts = [];
+
+  // CFG methods
+  var cfgSigs = Object.keys(_cfgChatCheckedCfg).sort();
+  cfgSigs.forEach(function(sig) {
+    var blocks = _jimpleCfgMethods[sig];
+    if (!blocks) return;
+    var src = _jimpleCfgSources[sig] || '';
+    var cfgText = blocks.map(function(b) {
+      var succsStr = b.succs.map(function(s) { return s.label ? s.id + '[' + s.label + ']' : s.id; }).join(', ');
+      return 'Block ' + b.id + ':\\n' + b.stmts.join('\\n') + (succsStr ? '\\n  -> ' + succsStr : '');
+    }).join('\\n\\n');
+    parts.push(
+      '=== CFG METHOD: ' + sig + ' ===\\n' +
+      (src ? '--- Jimple source ---\\n' + src + '\\n--- end source ---\\n\\n' : '') +
+      '--- CFG blocks ---\\n' + cfgText + '\\n=== END METHOD ==='
+    );
+  });
+
+  // Class files (deduplicated)
+  var classKeys = Object.keys(_cfgChatCheckedClass).sort();
+  classKeys.forEach(function(key) {
+    var src = _jimpleCfgSources[key];
+    if (!src) return;
+    var name = _cfgChatClassName(key);
+    parts.push('=== JIMPLE CLASS: ' + name + ' ===\\n' + src + '\\n=== END CLASS ===');
+  });
+
+  return parts.length ? parts.join('\\n\\n') : null;
+}
+
+async function jimpleCfgChatSend() {
+  if (_cfgChatStreaming) return;
+  var input = document.getElementById('jimpleCfgChatInput');
+  var text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  var contextBlock = _jimpleCfgChatBuildContext();
+  var isFirst = _cfgChatHistory.length === 0;
+  var userContent = text;
+  if (contextBlock) {
+    if (isFirst) {
+      userContent = 'I have provided the following Jimple bytecode and control flow graph data for analysis. Please use it to answer my questions.\\n\\n' + contextBlock + '\\n\\nMy question: ' + text;
+    } else {
+      // Re-attach context on every turn so the model never loses it
+      userContent = '[Context (for reference):]\\n' + contextBlock + '\\n\\n[My question:] ' + text;
+    }
+  }
+
+  var systemMsg = 'You are an expert Android reverse-engineer and bytecode analyst. The user will provide Jimple IR bytecode (3-address code produced by the Soot framework from an Android APK) and control flow graph data. Help analyze the code for logic, security issues, data flow, or any other questions the user has. When referencing CFG blocks use the block ID. Format code as fenced code blocks.';
+
+  _cfgChatHistory.push({ role: 'user', content: userContent });
+  _jimpleCfgChatAppendBubble('user', text);
+
+  _cfgChatStreaming = true;
+  document.getElementById('jimpleCfgChatSendBtn').disabled = true;
+  var assistantEl = _jimpleCfgChatAppendBubble('assistant', '');
+  var accumulated = '';
+
+  try {
+    var resp = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ system: systemMsg, history: _cfgChatHistory }),
+    });
+    if (!resp.ok) { throw new Error(await resp.text()); }
+
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buf = '';
+    while (true) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
+      var lines = buf.split('\\n');
+      buf = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (!line.startsWith('data: ')) continue;
+        var payload = line.slice(6).trim();
+        if (payload === '[DONE]') break;
+        try {
+          var parsed = JSON.parse(payload);
+          var delta = (parsed.choices[0].delta.content) || '';
+          accumulated += delta;
+          chatRenderBubbleContent(assistantEl, accumulated);
+          var msgs = document.getElementById('jimpleCfgChatMessages');
+          msgs.scrollTop = msgs.scrollHeight;
+        } catch(_) {}
+      }
+    }
+    _cfgChatHistory.push({ role: 'assistant', content: accumulated });
+  } catch(e) {
+    chatRenderBubbleContent(assistantEl, '*Error: ' + escHtml(String(e)) + '*');
+  }
+
+  _cfgChatStreaming = false;
+  document.getElementById('jimpleCfgChatSendBtn').disabled = false;
+  var msgs2 = document.getElementById('jimpleCfgChatMessages');
+  msgs2.scrollTop = msgs2.scrollHeight;
+}
+
+function _jimpleCfgChatAppendBubble(role, content) {
+  var msgs = document.getElementById('jimpleCfgChatMessages');
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;flex-direction:column;gap:3px;' + (role === 'user' ? 'align-items:flex-end;' : 'align-items:flex-start;');
+  var label = document.createElement('div');
+  label.style.cssText = 'font-size:.68rem;color:var(--text-muted);padding:0 4px;';
+  label.textContent = role === 'user' ? 'You' : 'Assistant';
+  var bubble = document.createElement('div');
+  bubble.style.cssText = 'max-width:86%;padding:9px 13px;border-radius:10px;font-size:.82rem;line-height:1.55;'
+    + (role === 'user'
+      ? 'background:var(--accent-no-ads);color:#fff;border-bottom-right-radius:3px;'
+      : 'background:var(--card-bg);border:1px solid var(--card-border);color:var(--text);border-bottom-left-radius:3px;');
+  if (content) chatRenderBubbleContent(bubble, content);
+  wrap.appendChild(label);
+  wrap.appendChild(bubble);
+  msgs.appendChild(wrap);
+  msgs.scrollTop = msgs.scrollHeight;
+  return bubble;
 }
 
 // ── AI Chat ───────────────────────────────────────────────────────────────────
@@ -5037,6 +6168,7 @@ Return ONLY the Solidity source code. No markdown, no code fences, no explanatio
           "-allow-phantom-refs",
           "-whole-program",
           "-p", "cg", "enabled:false",
+          "-process-multiple-dex",
         ];
         if (fs.existsSync(resolvedJars)) {
           javaArgs.splice(javaArgs.indexOf("-d"), 0, "-android-jars", resolvedJars);

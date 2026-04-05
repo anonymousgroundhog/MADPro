@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node:*)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(grep -n \"^}\\\\$\\\\|^}$\\\\|return \\\\`\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Bash(grep -n \"^\\\\`$\\\\|^}\\\\`$\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Bash(grep -n \"^\\\\`;\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Bash(grep -n 'backtick\\\\|^`$\\\\|^`;$' /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)"
+    ]
+  }
+}

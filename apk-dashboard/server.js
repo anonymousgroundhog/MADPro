@@ -550,6 +550,7 @@ function renderHtml() {
   <button class="tab-btn" id="tabBtnTools" onclick="switchTab('tools')">🔧 Tools</button>
   <button class="tab-btn" id="tabBtnLogs" onclick="switchTab('logs')">🔍 Log Viewer</button>
   <button class="tab-btn" id="tabBtnFsm" onclick="switchTab('fsm')">🔬 FSM Analyzer</button>
+  <button class="tab-btn" id="tabBtnChat" onclick="switchTab('chat')">💬 AI Chat</button>
   <button class="tab-btn" id="tabBtnSettings" onclick="switchTab('settings')" style="margin-left:auto;">⚙ Settings</button>
 </div>
 
@@ -859,6 +860,92 @@ function renderHtml() {
     </div>
   </div>
 </div><!-- /tabSettings -->
+
+<!-- ── AI Chat tab content ── -->
+<div id="tabChat" style="display:none; padding:0; height:calc(100vh - 100px); flex-direction:column;">
+
+  <!-- Top bar: file context selector -->
+  <div style="display:flex;align-items:center;gap:8px;padding:10px 20px;background:var(--card-bg);border-bottom:1px solid var(--card-border);flex-shrink:0;flex-wrap:wrap;">
+    <span style="font-size:.8rem;color:var(--text-muted);white-space:nowrap;">Context file:</span>
+    <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:200px;">
+      <input type="text" id="chatFileDir" class="tools-input" style="flex:1;" placeholder="~/MADPro_Logcat" />
+      <button class="tools-btn-sm" onclick="browseForTools('chatFileDir')">Browse…</button>
+      <button class="tools-btn-sm" onclick="chatLoadFileList()">Load</button>
+    </div>
+    <select id="chatFileSelect" class="tools-input" style="min-width:200px;max-width:320px;">
+      <option value="">— no file context —</option>
+    </select>
+    <div id="chatFileMeta" style="font-size:.72rem;color:var(--text-muted);white-space:nowrap;"></div>
+    <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
+      <span style="font-size:.75rem;color:var(--text-muted);white-space:nowrap;">Model:</span>
+      <input type="text" id="chatModelInput" class="tools-input" style="width:180px;font-size:.78rem;" placeholder="from Settings" />
+      <button class="tools-btn-sm" onclick="chatSaveModel(this)" title="Save model to Settings">Save</button>
+      <button class="tools-btn-sm" onclick="chatClear()">Clear chat</button>
+    </div>
+  </div>
+
+  <!-- Message history -->
+  <!-- Chat body: messages + optional mermaid panel side by side -->
+  <div style="flex:1;display:flex;overflow:hidden;min-height:0;">
+
+    <!-- Message history -->
+    <div id="chatMessages" style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px;min-height:0;"></div>
+
+    <!-- Mermaid Viewer panel (hidden by default) -->
+    <div id="chatMermaidPanel" style="display:none;width:440px;flex-shrink:0;border-left:1px solid var(--card-border);flex-direction:column;background:var(--card-bg);">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--card-border);flex-shrink:0;">
+        <span style="font-size:.8rem;font-weight:600;color:var(--accent);">Mermaid Viewer</span>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <button class="tools-btn-sm" onclick="chatMermaidRender()" style="background:var(--accent);color:#fff;">Render</button>
+          <button class="tools-btn-sm" onclick="chatMermaidZoom('chatMermaidOutput',-0.2)" title="Zoom out">-</button>
+          <span id="chatMermaidZoomLabel" style="font-size:.7rem;color:var(--text-muted);min-width:30px;text-align:center;">100%</span>
+          <button class="tools-btn-sm" onclick="chatMermaidZoom('chatMermaidOutput',0.2)" title="Zoom in">+</button>
+          <button class="tools-btn-sm" onclick="chatMermaidZoomReset('chatMermaidOutput','chatMermaidZoomLabel')" title="Reset zoom">1:1</button>
+          <button class="tools-btn-sm" onclick="chatMermaidClear()">Clear</button>
+          <button class="tools-btn-sm" onclick="chatMermaidFullscreen()" title="Fullscreen">[ ]</button>
+          <button class="tools-btn-sm" onclick="chatMermaidClose()" title="Close">x</button>
+        </div>
+      </div>
+      <textarea id="chatMermaidInput" spellcheck="false" style="
+        flex:0 0 200px;resize:vertical;background:#0d1117;color:#e6edf3;
+        border:none;border-bottom:1px solid var(--card-border);
+        padding:10px 12px;font-family:monospace;font-size:.78rem;line-height:1.5;
+        outline:none;
+      " placeholder="Paste Mermaid code here..."></textarea>
+      <div id="chatMermaidOutput" style="flex:1;overflow:auto;padding:12px;display:flex;align-items:flex-start;justify-content:center;cursor:grab;"></div>
+    </div>
+
+  </div>
+
+  <!-- Mermaid fullscreen overlay -->
+  <div id="chatMermaidOverlay" onclick="chatMermaidExitFullscreen(event)" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+    <div style="position:relative;background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;width:92vw;height:88vh;display:flex;flex-direction:column;overflow:hidden;" onclick="event.stopPropagation()">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--card-border);flex-shrink:0;">
+        <span style="font-size:.85rem;font-weight:600;color:var(--accent);">Mermaid Viewer</span>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <button class="tools-btn-sm" onclick="chatMermaidZoom('chatMermaidOverlayOutput',-0.2)" title="Zoom out">-</button>
+          <span id="chatMermaidOverlayZoomLabel" style="font-size:.7rem;color:var(--text-muted);min-width:30px;text-align:center;">100%</span>
+          <button class="tools-btn-sm" onclick="chatMermaidZoom('chatMermaidOverlayOutput',0.2)" title="Zoom in">+</button>
+          <button class="tools-btn-sm" onclick="chatMermaidZoomReset('chatMermaidOverlayOutput','chatMermaidOverlayZoomLabel')" title="Reset zoom">1:1</button>
+          <button class="tools-btn-sm" onclick="chatMermaidExitFullscreen()" style="padding:4px 10px;">Close</button>
+        </div>
+      </div>
+      <div id="chatMermaidOverlayOutput" style="flex:1;overflow:auto;padding:20px;display:flex;align-items:flex-start;justify-content:center;cursor:grab;"></div>
+    </div>
+  </div>
+
+  <!-- Input bar -->
+  <div style="display:flex;gap:8px;padding:12px 20px;background:var(--card-bg);border-top:1px solid var(--card-border);flex-shrink:0;align-items:flex-end;">
+    <textarea id="chatInput" rows="2" style="
+      flex:1;background:var(--surface);border:1px solid var(--card-border);color:var(--text);
+      padding:10px 12px;border-radius:8px;font-size:.85rem;line-height:1.5;resize:none;
+      font-family:inherit;
+    " placeholder="Ask about the loaded file…" onkeydown="chatInputKeydown(event)"></textarea>
+    <button class="tools-btn-sm" onclick="chatMermaidToggle()" title="Open Mermaid Viewer" style="align-self:stretch;padding:10px 12px;">Mermaid</button>
+    <button class="tools-btn-primary" id="chatSendBtn" onclick="chatSend()" style="padding:10px 20px;align-self:stretch;">Send</button>
+  </div>
+
+</div><!-- /tabChat -->
 
 <!-- Export PDF Modal -->
 <div class="modal-overlay" id="exportModal" onclick="handleExportOverlayClick(event)">
@@ -1354,15 +1441,19 @@ function switchTab(name) {
   document.getElementById('tabLogs').style.display     = name === 'logs'     ? '' : 'none';
   document.getElementById('tabFsm').style.display      = name === 'fsm'      ? '' : 'none';
   document.getElementById('tabSettings').style.display = name === 'settings' ? '' : 'none';
+  var chatEl = document.getElementById('tabChat');
+  chatEl.style.display = name === 'chat' ? 'flex' : 'none';
   document.getElementById('tabBtnKanban').classList.toggle('active', name === 'kanban');
   document.getElementById('tabBtnTools').classList.toggle('active', name === 'tools');
   document.getElementById('tabBtnLogs').classList.toggle('active', name === 'logs');
   document.getElementById('tabBtnFsm').classList.toggle('active', name === 'fsm');
+  document.getElementById('tabBtnChat').classList.toggle('active', name === 'chat');
   document.getElementById('tabBtnSettings').classList.toggle('active', name === 'settings');
   if (name === 'tools')    initToolsTab();
   if (name === 'logs')     initLogsTab();
   if (name === 'fsm')      fsmInitTab();
   if (name === 'settings') settingsInit();
+  if (name === 'chat')     chatInitTab();
 }
 
 // ── Tools tab ────────────────────────────────────────────────────────────────
@@ -1901,7 +1992,7 @@ async function runKeywordSearch() {
         var hkw = hitKws[hi];
         if (!hkw.clean) continue;
         var re = new RegExp('(' + escHtml(hkw.clean) + ')', 'gi');
-        highlighted = highlighted.replace(re, '<mark style="background:' + hkw.color + '33;color:' + hkw.color + ';border-radius:2px;padding:0 1px;font-weight:bold;">$1</mark>');
+        highlighted = highlighted.replace(re, function(_, m) { return '<mark style="background:' + hkw.color + '33;color:' + hkw.color + ';border-radius:2px;padding:0 1px;font-weight:bold;">' + m + '</mark>'; });
       }
 
       var badges = hitKws.map(function(km) {
@@ -2221,10 +2312,10 @@ function fsmRenderResults(data) {
     for (var hi = 0; hi < kwIdxs.length; hi++) {
       var t2 = data.transitions[kwIdxs[hi]];
       if (!t2) continue;
-      var mname = t2.method.replace(new RegExp('[.*+?^$' + '{}()|[\\]\\\\]', 'g'), '\\$&');
+      var mname = t2.method.replace(new RegExp('[.*+?^$' + '{}()|[\\\\]\\\\\\\\]', 'g'), function(c) { return '\\\\' + c; });
       var hcolor = palette[kwIdxs[hi] % palette.length];
       highlighted = highlighted.replace(new RegExp('(' + mname + ')', 'gi'),
-        '<mark style="background:' + hcolor + '33;color:' + hcolor + ';border-radius:2px;padding:0 1px;font-weight:bold;">$1</mark>');
+        function(_, m) { return '<mark style="background:' + hcolor + '33;color:' + hcolor + ';border-radius:2px;padding:0 1px;font-weight:bold;">' + m + '</mark>'; });
     }
 
     var badges = kwIdxs.map(function(idx) {
@@ -2248,6 +2339,556 @@ function fsmRenderResults(data) {
   }
   html += '</div>';
   el.innerHTML = html;
+}
+
+// ── AI Chat ───────────────────────────────────────────────────────────────────
+
+var _chatHistory   = [];   // [{role,content}]
+var _chatFileText  = '';   // loaded file content (truncated)
+var _chatFileName  = '';
+var _chatStreaming  = false;
+
+async function chatLoadFileList() {
+  var dir = document.getElementById('chatFileDir').value.trim() || '~/MADPro_Logcat';
+  try {
+    var data = await api('/api/logs/list?dir=' + encodeURIComponent(dir));
+    var sel = document.getElementById('chatFileSelect');
+    var prev = sel.value;
+    sel.innerHTML = '<option value="">— no file context —</option>';
+    for (var i = 0; i < (data.files || []).length; i++) {
+      var f = data.files[i];
+      var opt = document.createElement('option');
+      opt.value = f.path; opt.textContent = f.name;
+      sel.appendChild(opt);
+    }
+    if (prev && [...sel.options].some(function(o) { return o.value === prev; })) sel.value = prev;
+    document.getElementById('chatFileMeta').textContent =
+      data.files.length ? data.files.length + ' file(s) found' : 'No files found';
+  } catch(e) {
+    document.getElementById('chatFileMeta').textContent = 'Error: ' + e.message;
+  }
+}
+
+function chatInputKeydown(ev) {
+  if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); chatSend(); }
+}
+
+async function chatSend() {
+  if (_chatStreaming) return;
+  var input = document.getElementById('chatInput');
+  var text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  // Load file context on first message or when file changes
+  var filePath = document.getElementById('chatFileSelect').value;
+  if (filePath && filePath !== _chatFileName) {
+    try {
+      var d = await api('/api/chat/file?path=' + encodeURIComponent(filePath));
+      _chatFileText = d.content || '';
+      _chatFileName = filePath;
+      document.getElementById('chatFileMeta').textContent =
+        d.truncated ? 'Context: ' + d.name + ' (truncated to ' + d.chars + ' chars)' : 'Context: ' + d.name;
+    } catch(e) {
+      chatAppendSystem('Could not load file: ' + e.message);
+    }
+  }
+
+  // Build user message — embed file context directly in first user turn so all models see it
+  var isFirstMsg = _chatHistory.length === 0;
+  var userContent = text;
+  if (_chatFileText && isFirstMsg) {
+    userContent = 'I have loaded the following file as context. Please answer my questions about it.\\n\\n--- FILE: ' + _chatFileName + ' ---\\n' + _chatFileText + '\\n--- END FILE ---\\n\\nMy question: ' + text;
+  }
+  var systemMsg = 'You are an Android app analysis assistant. Answer questions about the provided log file or code.';
+
+  // Append to history (full content with context) but display only the user's question
+  _chatHistory.push({ role: 'user', content: userContent });
+  chatAppendBubble('user', text);
+
+  // Stream response
+  _chatStreaming = true;
+  document.getElementById('chatSendBtn').disabled = true;
+  var assistantEl = chatAppendBubble('assistant', '');
+  var accumulated = '';
+
+  try {
+    var resp = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ system: systemMsg, history: _chatHistory }),
+    });
+    if (!resp.ok) { throw new Error(await resp.text()); }
+
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buf = '';
+    while (true) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
+      // SSE: lines starting with "data: "
+      var lines = buf.split('\\n');
+      buf = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (!line.startsWith('data: ')) continue;
+        var payload = line.slice(6).trim();
+        if (payload === '[DONE]') break;
+        try {
+          var parsed = JSON.parse(payload);
+          var delta = (parsed.choices[0].delta.content) || '';
+          accumulated += delta;
+          chatRenderBubbleContent(assistantEl, accumulated);
+        } catch(_) {}
+      }
+    }
+    _chatHistory.push({ role: 'assistant', content: accumulated });
+  } catch(e) {
+    chatRenderBubbleContent(assistantEl, '*Error: ' + escHtml(String(e)) + '*');
+  }
+
+  _chatStreaming = false;
+  document.getElementById('chatSendBtn').disabled = false;
+  chatScrollBottom();
+}
+
+function chatAppendBubble(role, content) {
+  var msgs = document.getElementById('chatMessages');
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;flex-direction:column;gap:4px;' + (role === 'user' ? 'align-items:flex-end;' : 'align-items:flex-start;');
+  var label = document.createElement('div');
+  label.style.cssText = 'font-size:.7rem;color:var(--text-muted);padding:0 4px;';
+  label.textContent = role === 'user' ? 'You' : 'Assistant';
+  var bubble = document.createElement('div');
+  bubble.style.cssText = 'max-width:82%;padding:10px 14px;border-radius:10px;font-size:.84rem;line-height:1.6;'
+    + (role === 'user'
+      ? 'background:var(--accent-no-ads);color:#fff;border-bottom-right-radius:3px;'
+      : 'background:var(--card-bg);border:1px solid var(--card-border);color:var(--text);border-bottom-left-radius:3px;');
+  if (content) chatRenderBubbleContent(bubble, content);
+  wrap.appendChild(label);
+  wrap.appendChild(bubble);
+  msgs.appendChild(wrap);
+  chatScrollBottom();
+  return bubble;
+}
+
+function chatAppendSystem(text) {
+  var msgs = document.getElementById('chatMessages');
+  var el = document.createElement('div');
+  el.style.cssText = 'font-size:.75rem;color:var(--text-muted);text-align:center;padding:4px 0;';
+  el.textContent = text;
+  msgs.appendChild(el);
+}
+
+function chatMakeCopyBtn(getText) {
+  var btn = document.createElement('button');
+  btn.textContent = 'Copy';
+  btn.style.cssText = 'position:absolute;top:6px;right:6px;font-size:.65rem;padding:2px 7px;border-radius:4px;border:1px solid var(--card-border);background:var(--surface);color:var(--text-muted);cursor:pointer;opacity:.8;';
+  btn.onclick = function() {
+    var txt = typeof getText === 'function' ? getText() : getText;
+    navigator.clipboard.writeText(txt).then(function() {
+      btn.textContent = 'Copied!';
+      btn.style.color = '#22c55e';
+      setTimeout(function() { btn.textContent = 'Copy'; btn.style.color = ''; }, 1500);
+    });
+  };
+  return btn;
+}
+
+// Render bubble content: detect code/mermaid fenced blocks, add copy buttons
+function chatRenderBubbleContent(bubble, text) {
+  var fence = '\x60\x60\x60';
+  var mermaidKW = ['graph ', 'flowchart ', 'sequencediagram', 'classdiagram', 'statediagram', 'erdiagram', 'gantt', 'pie ', 'gitgraph', 'mindmap', 'timeline'];
+  bubble.innerHTML = '';
+
+  // indexOf-based fence splitter — RegExp fails with literal backtick strings in template context
+  var parts = [];
+  var remaining = text;
+  while (remaining.length > 0) {
+    var fstart = remaining.indexOf(fence);
+    if (fstart === -1) { parts.push({ type: 'text', content: remaining }); break; }
+    if (fstart > 0) parts.push({ type: 'text', content: remaining.slice(0, fstart) });
+    remaining = remaining.slice(fstart);
+    var fend = remaining.indexOf(fence, fence.length);
+    if (fend === -1) { parts.push({ type: 'text', content: remaining }); break; }
+    var block = remaining.slice(0, fend + fence.length);
+    parts.push({ type: 'code', content: block });
+    remaining = remaining.slice(fend + fence.length);
+  }
+
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i];
+    if (part.type === 'text') {
+      if (!part.content.trim()) continue;
+      var p = document.createElement('div');
+      p.style.cssText = 'white-space:pre-wrap;word-break:break-word;';
+      p.innerHTML = chatSimpleMarkdown(part.content);
+      bubble.appendChild(p);
+    } else {
+      // Strip the opening fence + optional language tag to get raw code
+      var raw = part.content;
+      // Remove opening fence line
+      var nlPos = raw.indexOf('\\n');
+      var langLine = nlPos === -1 ? raw : raw.slice(0, nlPos);
+      var inner = nlPos === -1 ? '' : raw.slice(nlPos + 1);
+      // Remove closing fence
+      if (inner.slice(-fence.length) === fence) inner = inner.slice(0, -fence.length);
+      inner = inner.trim();
+      var lang = langLine.slice(fence.length).trim().toLowerCase();
+      var isMermaid = lang === 'mermaid' || mermaidKW.some(function(kw) { return inner.toLowerCase().indexOf(kw) === 0; });
+
+      var codeWrap = document.createElement('div');
+      codeWrap.style.cssText = 'position:relative;margin:8px 0;';
+      var pre = document.createElement('pre');
+      pre.style.cssText = 'margin:0;background:#0d1117;border:1px solid var(--card-border);border-radius:8px;padding:10px 10px 10px 10px;padding-top:34px;font-size:.75rem;overflow-x:auto;color:#e6edf3;line-height:1.6;';
+      pre.textContent = inner;
+
+      var btnBar = document.createElement('div');
+      btnBar.style.cssText = 'position:absolute;top:6px;right:6px;display:flex;gap:4px;';
+
+      var cpBtn = chatMakeCopyBtn(inner);
+      cpBtn.style.cssText = 'font-size:.65rem;padding:2px 7px;border-radius:4px;border:1px solid var(--card-border);background:var(--surface);color:var(--text-muted);cursor:pointer;';
+      btnBar.appendChild(cpBtn);
+
+      if (isMermaid) {
+        var vBtn = document.createElement('button');
+        vBtn.textContent = 'View Diagram';
+        vBtn.style.cssText = 'font-size:.65rem;padding:2px 7px;border-radius:4px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;';
+        (function(c) { vBtn.onclick = function() { chatMermaidOpen(c); }; })(inner);
+        btnBar.appendChild(vBtn);
+      }
+
+      codeWrap.appendChild(pre);
+      codeWrap.appendChild(btnBar);
+      bubble.appendChild(codeWrap);
+    }
+  }
+  chatScrollBottom();
+}
+
+var _mermaidReady = false;
+var _mermaidQueue = [];
+
+function chatEnsureMermaid(cb) {
+  if (_mermaidReady) { cb(); return; }
+  if (typeof mermaid !== 'undefined') {
+    mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+    _mermaidReady = true;
+    cb();
+    return;
+  }
+  // Load mermaid dynamically
+  if (!document.getElementById('mermaid-script')) {
+    var s = document.createElement('script');
+    s.id = 'mermaid-script';
+    s.src = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js';
+    s.onload = function() {
+      mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+      _mermaidReady = true;
+      cb();
+    };
+    document.head.appendChild(s);
+  } else {
+    // Script tag exists but not loaded yet — poll
+    var t = setInterval(function() {
+      if (typeof mermaid !== 'undefined') {
+        clearInterval(t);
+        mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+        _mermaidReady = true;
+        cb();
+      }
+    }, 100);
+  }
+}
+
+var MERMAID_NODE_LIMIT = 80;
+function chatRenderMermaid(code, container) {
+  // Count rough node count — skip render for very large graphs to avoid browser freeze
+  var lineCount = code.split('\\n').length;
+  if (lineCount > MERMAID_NODE_LIMIT) {
+    container.innerHTML = '<div style="color:var(--text-muted);font-size:.75rem;padding:4px 0;">Diagram too large to render (' + lineCount + ' lines). Showing source:</div>'
+      + '<pre style="color:var(--text-muted);font-size:.72rem;white-space:pre-wrap;margin:0;max-height:300px;overflow:auto;">' + escHtml(code) + '</pre>';
+    return;
+  }
+  container.style.minHeight = '120px';
+  container.innerHTML = '<div style="color:var(--text-muted);font-size:.72rem;padding:8px;">Rendering diagram...</div>';
+  chatEnsureMermaid(function() {
+    var svgId = 'mermaid-chat-' + Date.now() + '-' + Math.floor(Math.random() * 9999) + '-svg';
+    var doRender = function() {
+      mermaid.render(svgId, code).then(function(result) {
+        container.style.minHeight = '';
+        container.innerHTML = result.svg;
+        var svg = container.querySelector('svg');
+        if (svg) {
+          svg.style.width = '100%';
+          svg.style.height = 'auto';
+          svg.style.minHeight = '200px';
+          svg.removeAttribute('width');
+          svg.removeAttribute('height');
+        }
+        var leftover = document.getElementById('d' + svgId);
+        if (leftover) leftover.remove();
+      }).catch(function() {
+        container.style.minHeight = '';
+        container.innerHTML = '<pre style="color:var(--text-muted);font-size:.75rem;white-space:pre-wrap;margin:0;">' + escHtml(code) + '</pre>';
+        setTimeout(function() {
+          var leftover = document.getElementById('d' + svgId);
+          if (leftover) leftover.remove();
+        }, 0);
+      });
+    };
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(doRender, { timeout: 2000 });
+    } else {
+      setTimeout(doRender, 0);
+    }
+  });
+}
+
+function chatSimpleMarkdown(text) {
+  var t = escHtml(text);
+  var boldRe = new RegExp('[*][*]([^*]+)[*][*]', 'g');
+  var emRe = new RegExp('[*]([^*]+)[*]', 'g');
+  var codeRe = new RegExp('\x60([^\x60]+)\x60', 'g');
+  t = t.replace(boldRe, function(_, m) { return '<strong>' + m + '</strong>'; });
+  t = t.replace(emRe, function(_, m) { return '<em>' + m + '</em>'; });
+  t = t.replace(codeRe, function(_, m) { return '<code style="background:#0d1117;padding:1px 5px;border-radius:3px;font-family:monospace;font-size:.82em;">' + m + '</code>'; });
+  return t;
+}
+
+function chatScrollBottom() {
+  var msgs = document.getElementById('chatMessages');
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function chatClear() {
+  _chatHistory = [];
+  _chatFileText = '';
+  _chatFileName = '';
+  document.getElementById('chatMessages').innerHTML = '';
+}
+
+// ── Mermaid Viewer panel ──────────────────────────────────────────────────
+function chatMermaidToggle() {
+  var panel = document.getElementById('chatMermaidPanel');
+  var visible = panel.style.display !== 'none' && panel.style.display !== '';
+  panel.style.display = visible ? 'none' : 'flex';
+}
+
+function chatMermaidOpen(code) {
+  var panel = document.getElementById('chatMermaidPanel');
+  panel.style.display = 'flex';
+  document.getElementById('chatMermaidInput').value = code;
+  chatMermaidRender();
+}
+
+function chatMermaidClose() {
+  document.getElementById('chatMermaidPanel').style.display = 'none';
+}
+
+var _mermaidZoomLevels = {};
+
+function chatMermaidZoom(containerId, delta) {
+  var labelId = containerId === 'chatMermaidOutput' ? 'chatMermaidZoomLabel' : 'chatMermaidOverlayZoomLabel';
+  var current = _mermaidZoomLevels[containerId] || 1.0;
+  var next = Math.min(5.0, Math.max(0.1, Math.round((current + delta) * 10) / 10));
+  _mermaidZoomLevels[containerId] = next;
+  var svg = document.querySelector('#' + containerId + ' svg');
+  if (svg) {
+    svg.style.transform = 'scale(' + next + ')';
+    svg.style.transformOrigin = 'top left';
+    // Expand container so scrollbars appear at the right size
+    svg.style.display = 'block';
+    svg.parentNode.style.minWidth = Math.round(svg.getBoundingClientRect().width / next * next) + 'px';
+  }
+  var label = document.getElementById(labelId);
+  if (label) label.textContent = Math.round(next * 100) + '%';
+}
+
+function chatMermaidZoomReset(containerId, labelId) {
+  _mermaidZoomLevels[containerId] = 1.0;
+  var svg = document.querySelector('#' + containerId + ' svg');
+  if (svg) { svg.style.transform = ''; svg.style.transformOrigin = ''; svg.style.display = ''; }
+  var label = document.getElementById(labelId);
+  if (label) label.textContent = '100%';
+}
+
+function chatMermaidApplyZoom(containerId) {
+  var level = _mermaidZoomLevels[containerId] || 1.0;
+  if (level !== 1.0) chatMermaidZoom(containerId, 0);
+}
+
+function chatMermaidFullscreen() {
+  var overlay = document.getElementById('chatMermaidOverlay');
+  var overlayOut = document.getElementById('chatMermaidOverlayOutput');
+  var code = document.getElementById('chatMermaidInput').value.trim();
+  if (!code) return;
+  overlay.style.display = 'flex';
+  overlayOut.innerHTML = '<span style="color:var(--text-muted);font-size:.8rem;">Rendering...</span>';
+  chatEnsureMermaid(function() {
+    chatMermaidDoRender(code, overlayOut, 0);
+  });
+}
+
+function chatMermaidExitFullscreen(ev) {
+  if (!ev || ev.target === document.getElementById('chatMermaidOverlay') || ev.type !== 'click' || !ev.currentTarget) {
+    document.getElementById('chatMermaidOverlay').style.display = 'none';
+    document.getElementById('chatMermaidOverlayOutput').innerHTML = '';
+  }
+}
+
+function chatMermaidClear() {
+  document.getElementById('chatMermaidInput').value = '';
+  document.getElementById('chatMermaidOutput').innerHTML = '';
+}
+
+function chatMermaidAutoFix(code) {
+  var lines = code.split('\\n');
+  // Detect diagram type from first non-empty line
+  var firstLine = '';
+  for (var i = 0; i < lines.length; i++) { if (lines[i].trim()) { firstLine = lines[i].trim().toLowerCase(); break; } }
+  var isFlow = firstLine.startsWith('graph') || firstLine.startsWith('flowchart');
+
+  var fixed = lines.map(function(line) {
+    var t = line;
+    // Remove markdown bold/italic artifacts inside node labels
+    t = t.replace(new RegExp('[*][*]([^*]+)[*][*]', 'g'), function(_, m) { return m; });
+    t = t.replace(new RegExp('[*]([^*]+)[*]', 'g'), function(_, m) { return m; });
+    // Fix common arrow typos: -> should be --> in flowcharts
+    if (isFlow) {
+      // single dash arrow: A -> B  =>  A --> B (but not inside labels)
+      t = t.replace(/ -([^->) ]) /g, function(_, c) { return ' --' + c + ' '; });
+      t = t.replace(/ ->([^>])/g, function(_, c) { return ' -->' + c; });
+    }
+    // Remove trailing semicolons that break some parsers
+    t = t.replace(/;+$/, '');
+    // Fix unquoted curly-brace node labels: B{foo bar} => B{"foo bar"} only if label has spaces
+    t = t.replace(/([A-Za-z0-9_]+)\{([^}]+)\}/g, function(_, id, label) {
+      if (label.indexOf(' ') !== -1 && label[0] !== '"') return id + '{"' + label + '"}';
+      return id + '{' + label + '}';
+    });
+    // Fix unquoted square-bracket node labels with special chars (colons etc): A[foo: bar] => A["foo: bar"]
+    t = t.replace(new RegExp('([A-Za-z0-9_]+)\\\\[([^\\\\]]+)\\\\]', 'g'), function(_, id, label) {
+      if ((label.indexOf(':') !== -1 || label.indexOf(',') !== -1) && label[0] !== '"') return id + '["' + label + '"]';
+      return id + '[' + label + ']';
+    });
+    // Fix smart/curly quotes to straight quotes in labels
+    t = t.replace(/[\u201c\u201d]/g, '"');
+    t = t.replace(/[\u2018\u2019]/g, "'");
+    // Fix em-dash used as arrow: A -- B => A --> B when in flow diagrams
+    if (isFlow) {
+      t = t.replace(/ \u2014 /g, ' --> ');
+    }
+    // Strip leading/trailing whitespace-only lines bloat
+    return t;
+  });
+
+  // Remove consecutive blank lines
+  var out = [];
+  var prevBlank = false;
+  for (var j = 0; j < fixed.length; j++) {
+    var blank = fixed[j].trim() === '';
+    if (blank && prevBlank) continue;
+    out.push(fixed[j]);
+    prevBlank = blank;
+  }
+  return out.join('\\n');
+}
+
+function chatMermaidDoRender(code, out, attempt) {
+  var svgId = 'mermaid-viewer-' + Date.now() + '-' + attempt + '-svg';
+  // Reset zoom for this container before rendering
+  var containerId = out.id;
+  _mermaidZoomLevels[containerId] = 1.0;
+  var zLabelId = containerId === 'chatMermaidOutput' ? 'chatMermaidZoomLabel' : 'chatMermaidOverlayZoomLabel';
+  var zLabel = document.getElementById(zLabelId);
+  if (zLabel) zLabel.textContent = '100%';
+
+  mermaid.render(svgId, code).then(function(result) {
+    out.innerHTML = result.svg;
+    var svg = out.querySelector('svg');
+    if (svg) {
+      svg.removeAttribute('width');
+      svg.removeAttribute('height');
+      svg.style.cssText = 'width:100%;height:auto;min-height:200px;font-size:14px;display:block;transform-origin:top left;';
+      svg.querySelectorAll('text, .label, .nodeLabel').forEach(function(el) {
+        el.style.fontSize = '13px';
+        el.style.fontFamily = 'Segoe UI, system-ui, sans-serif';
+      });
+      // Mouse wheel zoom
+      out.onwheel = function(e) {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          chatMermaidZoom(containerId, e.deltaY < 0 ? 0.1 : -0.1);
+        }
+      };
+    }
+    var leftover = document.getElementById('d' + svgId);
+    if (leftover) leftover.remove();
+    if (attempt > 0) {
+      // Show a notice that auto-fix was applied
+      var notice = document.createElement('div');
+      notice.style.cssText = 'font-size:.68rem;color:#f59e0b;margin-top:6px;';
+      notice.textContent = 'Auto-fixed ' + attempt + ' issue(s) before rendering.';
+      out.appendChild(notice);
+      // Update the textarea with the fixed code
+      document.getElementById('chatMermaidInput').value = code;
+    }
+  }).catch(function() {
+    if (attempt === 0) {
+      // First attempt failed — try auto-fix and retry once
+      var fixed = chatMermaidAutoFix(code);
+      if (fixed !== code) {
+        chatMermaidDoRender(fixed, out, 1);
+      } else {
+        out.innerHTML = '<pre style="color:var(--text-muted);font-size:.75rem;white-space:pre-wrap;">' + escHtml(code) + '</pre>'
+          + '<div style="color:#ef4444;font-size:.72rem;margin-top:4px;">Could not render — check Mermaid syntax.</div>';
+      }
+    } else {
+      // Auto-fix also failed — show raw code with error
+      out.innerHTML = '<pre style="color:var(--text-muted);font-size:.75rem;white-space:pre-wrap;">' + escHtml(code) + '</pre>'
+        + '<div style="color:#ef4444;font-size:.72rem;margin-top:4px;">Auto-fix did not resolve the syntax error.</div>';
+    }
+    setTimeout(function() { var l = document.getElementById('d' + svgId); if (l) l.remove(); }, 0);
+  });
+}
+
+function chatMermaidRender() {
+  var code = document.getElementById('chatMermaidInput').value.trim();
+  var out = document.getElementById('chatMermaidOutput');
+  if (!code) { out.innerHTML = '<span style="color:var(--text-muted);font-size:.8rem;">Paste Mermaid code above and click Render.</span>'; return; }
+  out.innerHTML = '<span style="color:var(--text-muted);font-size:.75rem;">Rendering...</span>';
+  chatEnsureMermaid(function() {
+    chatMermaidDoRender(code, out, 0);
+  });
+}
+
+async function chatInitTab() {
+  // Load saved model into the inline input
+  try {
+    var s = await api('/api/settings');
+    var inp = document.getElementById('chatModelInput');
+    if (!inp.value) inp.value = s.openwebui_model || '';
+  } catch(_) {}
+}
+
+async function chatSaveModel(btn) {
+  var model = document.getElementById('chatModelInput').value.trim();
+  if (!model) return;
+  try {
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ openwebui_model: model })
+    });
+    if (btn) {
+      var orig = btn.textContent;
+      btn.textContent = 'Saved';
+      btn.style.color = '#22c55e';
+      setTimeout(function() { btn.textContent = orig; btn.style.color = ''; }, 1500);
+    }
+  } catch(e) { alert('Save failed: ' + e.message); }
 }
 </script>
 </body>
@@ -2737,6 +3378,87 @@ const server = http.createServer(async (req, res) => {
       violations,
       totalEntries: entries.length,
     });
+  }
+
+  // GET /api/chat/file?path=/abs/path — read a file for chat context (truncated)
+  if (req.method === "GET" && pathname === "/api/chat/file") {
+    const fileParam = reqUrl.searchParams.get("path") || "";
+    if (!fileParam) return jsonResponse(res, { error: "Missing path" }, 400);
+    const abs = path.resolve(fileParam.replace(/^~/, os.homedir()));
+    try {
+      const MAX_CHARS = 40000;
+      const raw = fs.readFileSync(abs, "utf8");
+      const truncated = raw.length > MAX_CHARS;
+      return jsonResponse(res, {
+        name: path.basename(abs),
+        content: raw.slice(0, MAX_CHARS),
+        chars: Math.min(raw.length, MAX_CHARS),
+        truncated,
+      });
+    } catch (err) {
+      return jsonResponse(res, { error: err.message }, 500);
+    }
+  }
+
+  // POST /api/chat/stream — streaming chat via OpenWebUI
+  if (req.method === "POST" && pathname === "/api/chat/stream") {
+    const body = await readBody(req);
+    let payload;
+    try { payload = JSON.parse(body); } catch { return jsonResponse(res, { error: "Invalid JSON" }, 400); }
+
+    const { system, history, model: modelOverride } = payload;
+    const settings = loadSettings();
+    const owUrl   = (settings.openwebui_url || "http://localhost:3000").replace(/\/$/, "");
+    const owKey   = settings.openwebui_key  || "";
+    const owModel = modelOverride || settings.openwebui_model || "";
+    if (!owModel) {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      return res.end("No model configured — type one in the Model field or set one in Settings.");
+    }
+
+    const messages = [];
+    const histArr = history || [];
+    if (system) messages.push({ role: "system", content: system });
+    for (const m of histArr) messages.push({ role: m.role, content: m.content });
+
+    try {
+      const owRes = await fetch(owUrl + "/api/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(owKey ? { "Authorization": "Bearer " + owKey } : {}),
+        },
+        body: JSON.stringify({ model: owModel, messages, stream: true }),
+      });
+
+      if (!owRes.ok) {
+        const errText = await owRes.text();
+        res.writeHead(502, { "Content-Type": "text/plain" });
+        return res.end("OpenWebUI error " + owRes.status + ": " + errText.slice(0, 300));
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      });
+
+      // Pipe the SSE stream from OpenWebUI directly to the client
+      const reader = owRes.body.getReader();
+      const pump = async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) { res.end(); break; }
+          res.write(value);
+        }
+      };
+      req.on("close", () => reader.cancel());
+      pump().catch(() => res.end());
+    } catch (err) {
+      res.writeHead(502, { "Content-Type": "text/plain" });
+      res.end("Connection failed: " + err.message);
+    }
+    return;
   }
 
   res.writeHead(404);

@@ -74,3 +74,4 @@ apk-dashboard/package-lock.json
 *.tmp
 *.temp
 .cache/
+apk-dashboard/settings.json

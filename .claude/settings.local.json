@@ -71,7 +71,28 @@
       "Bash(sed -n '1455,1462p' /tmp/live.html)",
       "Bash(kill %1)",
       "Bash(grep:*)",
-      "WebFetch(domain:docs.openwebui.com)"
+      "WebFetch(domain:docs.openwebui.com)",
+      "Bash(curl -s http://127.0.0.1:3456/api/settings)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:3456/api/model-image)",
+      "Bash(\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js | grep -v \"//\\\\|favicon\" | head -40)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(ganache --version)",
+      "Bash(ganache-cli --version)",
+      "Bash(npx ganache:*)",
+      "Bash(cp:*)",
+      "Bash(curl -s http://localhost:3457/)",
+      "Bash(curl -s http://localhost:3458/)",
+      "Bash(pkill -f \"node server.js --port 3458\")",
+      "Bash(pkill -f \"node server.js --port 3459\")",
+      "Bash(curl -s http://localhost:3461/)",
+      "Bash(pkill -f \"node server.js --port 3461\")",
+      "Bash(curl -s http://localhost:3462/)",
+      "Bash(pkill -f \"node server.js --port 3462\")",
+      "Bash(curl -s http://localhost:3463/)",
+      "Bash(pkill -f \"node server.js --port 3463\")"
     ]
   }
 }

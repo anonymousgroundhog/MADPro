@@ -7,6 +7,7 @@ const http = require("http");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { spawn } = require("child_process");
 const { scanApks } = require("./scanner");
 const { lookupPlayStore, clearCache } = require("./playstore");
 const { inspectApk } = require("./apk_inspector");
@@ -563,6 +564,7 @@ function renderHtml() {
   <button class="tab-btn" id="tabBtnTools" onclick="switchTab('tools')">🔧 Tools</button>
   <button class="tab-btn" id="tabBtnLogs" onclick="switchTab('logs')">🔍 Log Viewer</button>
   <button class="tab-btn" id="tabBtnFsm" onclick="switchTab('fsm')">🔬 FSM Analyzer</button>
+  <button class="tab-btn" id="tabBtnJimple" onclick="switchTab('jimple')">🧩 Jimple</button>
   <button class="tab-btn" id="tabBtnChat" onclick="switchTab('chat')">💬 AI Chat</button>
   <button class="tab-btn" id="tabBtnSettings" onclick="switchTab('settings')" style="margin-left:auto;">⚙ Settings</button>
 </div>
@@ -748,9 +750,11 @@ function renderHtml() {
         color:var(--text);padding:10px 12px;border-radius:8px;font-family:monospace;font-size:.82rem;
         line-height:1.6;resize:vertical;
       " placeholder="attachInfo&#10;onCreate&#10;onPause&#10;onResume&#10;onDestroy"></textarea>
-      <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
         <button class="tools-btn-primary" onclick="runKeywordSearch()">Search</button>
         <button class="tools-btn-sm" onclick="clearKeywordSearch()">Clear</button>
+        <button class="tools-btn-sm" id="genContractBtn" onclick="openFsmContractModal()" style="background:var(--accent-ads);color:#fff;border-color:var(--accent-ads);" title="Generate a Solidity FSM smart contract from logs + keywords and deploy to Ganache">⛓ Generate FSM Contract</button>
+        <button class="tools-btn-sm" onclick="openFsmContractModalPush()" style="background:var(--accent-no-ads);color:#fff;border-color:var(--accent-no-ads);" title="Push loaded log data to a deployed FSM smart contract on Ganache">⬆ Push Data to Contract</button>
       </div>
       <div id="kwResults" style="margin-top:14px;"></div>
     </div>
@@ -778,6 +782,99 @@ function renderHtml() {
 
   </div>
 </div><!-- /tabLogs -->
+
+<!-- ── FSM Contract Generator Modal ── -->
+<div class="modal-overlay" id="fsmContractModal" onclick="if(event.target===this)closeFsmContractModal()">
+  <div class="modal" style="width:min(800px,96vw);max-height:90vh;">
+    <div class="modal-header">
+      <h2>⛓ Generate FSM Smart Contract</h2>
+      <button class="modal-close" onclick="closeFsmContractModal()">×</button>
+    </div>
+    <div style="padding:16px 18px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:14px;">
+
+      <!-- Step 1: Generate -->
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <button class="tools-btn-primary" id="fsmContractGenBtn" onclick="generateFsmContract()">Generate Contract</button>
+        <button class="tools-btn-sm" onclick="loadDefaultFsmContract()" title="Load the built-in FSMViolationAuditor template contract">Load Default</button>
+        <span id="fsmContractGenStatus" style="font-size:.8rem;color:var(--text-muted);"></span>
+      </div>
+
+      <!-- Contract source -->
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <div style="font-weight:700;font-size:.85rem;color:var(--accent-no-ads);">Solidity Contract</div>
+          <button class="tools-btn-sm" id="fsmContractCopyBtn" onclick="copyFsmContract()" style="display:none;">Copy</button>
+        </div>
+        <textarea id="fsmContractSource" rows="18" style="
+          width:100%;box-sizing:border-box;background:var(--card-bg);border:1px solid var(--card-border);
+          color:var(--text);padding:10px 12px;border-radius:8px;font-family:monospace;font-size:.78rem;
+          line-height:1.6;resize:vertical;
+        " placeholder="Click 'Generate Contract' to create a Solidity FSM smart contract from your log data and keywords…" readonly></textarea>
+      </div>
+
+      <!-- Ganache + deploy -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:end;">
+        <div>
+          <label style="font-size:.8rem;color:var(--text-muted);display:block;margin-bottom:4px;">Ganache URL</label>
+          <input type="text" id="ganacheUrl" class="tools-input" value="http://127.0.0.1:7545" style="width:100%;box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="font-size:.8rem;color:var(--text-muted);display:block;margin-bottom:4px;">Ethereum Account</label>
+          <div style="display:flex;gap:6px;">
+            <select id="ethAccountSelect" class="tools-input" style="flex:1;">
+              <option value="">— load accounts —</option>
+            </select>
+            <button class="tools-btn-sm" onclick="loadEthAccounts()">Load</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <button class="tools-btn-primary" id="fsmDeployBtn" onclick="deployFsmContract()" disabled>Deploy to Ganache</button>
+        <span id="fsmDeployStatus" style="font-size:.8rem;color:var(--text-muted);"></span>
+      </div>
+
+      <!-- Contract address result -->
+      <div id="fsmContractResult" style="display:none;background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;padding:14px 16px;">
+        <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:4px;">Deployed Contract Address</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <code id="fsmContractAddress" style="font-size:.9rem;color:var(--accent-no-ads);word-break:break-all;flex:1;"></code>
+          <button class="tools-btn-sm" onclick="copyFsmContractAddress()">Copy</button>
+        </div>
+        <div id="fsmContractTxHash" style="font-size:.72rem;color:var(--text-muted);margin-top:6px;"></div>
+
+      </div>
+
+      <!-- Push data to contract -->
+      <div id="fsmPushSection" style="background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;padding:14px 16px;">
+        <div style="font-weight:700;font-size:.85rem;color:var(--accent-no-ads);margin-bottom:10px;">Push Data to Contract</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <label style="font-size:.8rem;color:var(--text-muted);white-space:nowrap;">Contract Address</label>
+          <input type="text" id="fsmPushContractAddr" class="tools-input" style="flex:1;font-family:monospace;font-size:.8rem;"
+            placeholder="0x… (auto-filled after deploy, or paste manually)" />
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <button class="tools-btn-primary" id="fsmPushDataBtn" onclick="pushDataToContract()">Push Data to Contract</button>
+          <span id="fsmPushStatus" style="font-size:.8rem;color:var(--text-muted);"></span>
+        </div>
+        <div id="fsmPushProgress" style="display:none;margin-top:10px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <div style="font-size:.78rem;color:var(--text-muted);">Progress:</div>
+            <div style="flex:1;background:var(--card-border);border-radius:4px;height:6px;overflow:hidden;">
+              <div id="fsmPushBar" style="height:100%;background:var(--accent-no-ads);width:0%;transition:width .2s;border-radius:4px;"></div>
+            </div>
+            <div id="fsmPushCount" style="font-size:.75rem;color:var(--text-muted);white-space:nowrap;">0 / 0</div>
+          </div>
+          <div id="fsmPushLog" style="
+            font-family:monospace;font-size:.72rem;background:var(--surface);border:1px solid var(--card-border);
+            border-radius:6px;padding:8px 10px;max-height:160px;overflow-y:auto;line-height:1.7;
+          "></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
 
 <!-- ── FSM Analyzer tab content ── -->
 <div id="tabFsm" style="display:none; padding:20px 24px;">
@@ -844,6 +941,206 @@ function renderHtml() {
 
   </div>
 </div><!-- /tabFsm -->
+
+<!-- ── Jimple APK browser modal ── -->
+<div id="jimpleApkBrowserModal" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.6);align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--card-border);border-radius:10px;width:520px;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--card-border);">
+      <div style="font-weight:600;font-size:.85rem;">Browse for APK</div>
+      <button onclick="document.getElementById('jimpleApkBrowserModal').style.display='none'" style="background:none;border:none;color:var(--text-muted);font-size:1.1rem;cursor:pointer;">✕</button>
+    </div>
+    <div id="jimpleApkBrowserPath" style="padding:6px 16px;font-size:.72rem;font-family:monospace;color:var(--text-muted);border-bottom:1px solid var(--card-border);"></div>
+    <div id="jimpleApkBrowserList" style="flex:1;overflow-y:auto;padding:4px 0;"></div>
+  </div>
+</div>
+
+<!-- ── Jimple Help modal ── -->
+<div id="jimpleHelpModal" onclick="if(event.target===this)this.style.display='none'" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.65);align-items:center;justify-content:center;">
+  <div onclick="event.stopPropagation()" style="background:var(--surface);border:1px solid var(--card-border);border-radius:12px;width:640px;max-height:82vh;display:flex;flex-direction:column;overflow:hidden;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--card-border);">
+      <div style="font-weight:700;font-size:.95rem;">Jimple Decompiler — Help</div>
+      <button onclick="document.getElementById('jimpleHelpModal').style.display='none'" style="background:none;border:none;color:var(--text-muted);font-size:1.1rem;cursor:pointer;">✕</button>
+    </div>
+    <div style="overflow-y:auto;padding:20px;font-size:.8rem;line-height:1.7;color:var(--text);">
+
+      <section style="margin-bottom:18px;">
+        <div style="font-weight:600;margin-bottom:6px;">What is Soot &amp; Jimple?</div>
+        <p style="color:var(--text-muted);margin:0;">Soot is a Java/Android bytecode analysis framework. This tool uses it to decompile an Android APK into <strong>Jimple</strong> — a simplified, typed, 3-address intermediate representation (IR). Each <code style="background:var(--card-bg);padding:1px 5px;border-radius:4px;">.jimple</code> file corresponds to one Java/Kotlin class from the app. Jimple lets you inspect what an app actually does at the bytecode level without needing its original source code.</p>
+      </section>
+
+      <section style="margin-bottom:18px;">
+        <div style="font-weight:600;margin-bottom:8px;">Workflow</div>
+        <ol style="margin:0;padding-left:1.4em;color:var(--text-muted);">
+          <li style="margin-bottom:4px;">Enter the <strong>APK File Path</strong> (use Browse to locate the .apk).</li>
+          <li style="margin-bottom:4px;">Set the <strong>Output Directory</strong> where Jimple files will be written.</li>
+          <li style="margin-bottom:4px;">Optionally set the <strong>Android Platforms Dir</strong> (e.g. <code style="background:var(--card-bg);padding:1px 4px;border-radius:3px;">~/Android/Sdk/platforms</code>) so Soot can resolve Android framework classes.</li>
+          <li style="margin-bottom:4px;">Click <strong>Run Soot</strong> and watch the live output log. Large APKs can take 1–3 minutes.</li>
+          <li style="margin-bottom:4px;">Once complete, the output directory is auto-loaded in the <strong>View Jimple File</strong> panel. Select any class to view its decompiled code.</li>
+        </ol>
+      </section>
+
+      <section style="margin-bottom:18px;">
+        <div style="font-weight:600;margin-bottom:8px;">Reading Jimple Code</div>
+        <div style="display:grid;gap:8px;">
+
+          <div style="background:var(--card-bg);border-radius:6px;padding:10px;">
+            <div style="color:#b794f4;font-weight:600;font-size:.75rem;margin-bottom:3px;">Invoke Types</div>
+            <div style="color:var(--text-muted);font-size:.75rem;">How methods are called:</div>
+            <div style="margin-top:6px;display:grid;gap:3px;font-size:.73rem;">
+              <div><code style="color:#b794f4;">staticinvoke</code> — calls a static method directly on a class (no object needed)</div>
+              <div><code style="color:#b794f4;">specialinvoke</code> — calls constructors <code>&lt;init&gt;</code>, super methods, or private methods</div>
+              <div><code style="color:#b794f4;">virtualinvoke</code> — calls an instance method with dynamic dispatch (most common)</div>
+              <div><code style="color:#b794f4;">interfaceinvoke</code> — calls a method defined in an interface</div>
+            </div>
+          </div>
+
+          <div style="background:var(--card-bg);border-radius:6px;padding:10px;">
+            <div style="color:#63b3ed;font-weight:600;font-size:.75rem;margin-bottom:3px;">Control Flow Keywords</div>
+            <div style="margin-top:4px;display:grid;gap:3px;font-size:.73rem;color:var(--text-muted);">
+              <div><code style="color:#63b3ed;">if … goto</code> — conditional branch: jumps to a target unit when the expression is true</div>
+              <div><code style="color:#63b3ed;">goto</code> — unconditional jump to another statement</div>
+              <div><code style="color:#63b3ed;">return</code> — exits the method, optionally carrying a return value</div>
+              <div><code style="color:#63b3ed;">throw</code> — raises an exception, transferring to a catch handler</div>
+              <div><code style="color:#63b3ed;">switch</code> / <code style="color:#63b3ed;">case</code> — multi-way branch based on a value</div>
+              <div><code style="color:#63b3ed;">new</code> — allocates heap memory; constructor called separately via <code>specialinvoke &lt;init&gt;</code></div>
+              <div><code style="color:#63b3ed;">instanceof</code> — runtime type check</div>
+            </div>
+          </div>
+
+          <div style="background:var(--card-bg);border-radius:6px;padding:10px;">
+            <div style="color:#76e4f7;font-weight:600;font-size:.75rem;margin-bottom:3px;">Modifiers &amp; Access</div>
+            <div style="font-size:.73rem;color:var(--text-muted);"><code style="color:#76e4f7;">public</code> / <code style="color:#76e4f7;">private</code> / <code style="color:#76e4f7;">protected</code> / <code style="color:#76e4f7;">static</code> / <code style="color:#76e4f7;">final</code> / <code style="color:#76e4f7;">abstract</code> — same meaning as in Java source code.</div>
+          </div>
+
+          <div style="background:var(--card-bg);border-radius:6px;padding:10px;">
+            <div style="color:#9ae6b4;font-weight:600;font-size:.75rem;margin-bottom:3px;">Primitive Types</div>
+            <div style="font-size:.73rem;color:var(--text-muted);"><code style="color:#9ae6b4;">void</code> / <code style="color:#9ae6b4;">int</code> / <code style="color:#9ae6b4;">long</code> / <code style="color:#9ae6b4;">boolean</code> / <code style="color:#9ae6b4;">float</code> / <code style="color:#9ae6b4;">double</code> / <code style="color:#9ae6b4;">byte</code> / <code style="color:#9ae6b4;">short</code> / <code style="color:#9ae6b4;">char</code> — the same Java primitive types.</div>
+          </div>
+
+          <div style="background:var(--card-bg);border-radius:6px;padding:10px;">
+            <div style="color:#68d391;font-weight:600;font-size:.75rem;margin-bottom:3px;">Class References <code style="font-weight:400;">&lt;ClassName: returnType method(params)&gt;</code></div>
+            <div style="font-size:.73rem;color:var(--text-muted);">Fully qualified method signatures in Soot format. Example: <code style="color:#68d391;">&lt;android.util.Log: int d(java.lang.String,java.lang.String)&gt;</code> — calling <code>Log.d()</code>.</div>
+          </div>
+
+          <div style="background:var(--card-bg);border-radius:6px;padding:10px;">
+            <div style="font-weight:600;font-size:.75rem;margin-bottom:3px;">Local Variables</div>
+            <div style="font-size:.73rem;color:var(--text-muted);">Jimple auto-names locals using type prefixes: <code>r0</code>, <code>r1</code> (object refs), <code>i0</code>, <code>i1</code> (ints), <code>l0</code> (longs), <code>f0</code> (floats), <code>$stack0</code> (temporaries). These replace original variable names which are lost in compiled bytecode.</div>
+          </div>
+
+          <div style="background:var(--card-bg);border-radius:6px;padding:10px;">
+            <div style="font-weight:600;font-size:.75rem;margin-bottom:3px;">3-Address Code Format</div>
+            <div style="font-size:.73rem;color:var(--text-muted);margin-bottom:4px;">Each Jimple statement performs at most one operation on at most three operands. Complex expressions are broken into simple steps:</div>
+            <pre style="margin:0;font-size:.7rem;color:#a8d8a8;background:#0f1117;border-radius:4px;padding:8px;overflow-x:auto;">r0 = new java.lang.StringBuilder;          // allocate
+specialinvoke r0.&lt;StringBuilder: void &lt;init&gt;()&gt;();  // construct
+r1 = virtualinvoke r0.&lt;StringBuilder: StringBuilder append(String)&gt;("hello");
+return r1;</pre>
+          </div>
+
+        </div>
+      </section>
+
+      <section style="margin-bottom:18px;">
+        <div style="font-weight:600;margin-bottom:6px;">What to Look For</div>
+        <div style="display:grid;gap:4px;font-size:.75rem;color:var(--text-muted);">
+          <div>🔐 <strong>Sensitive API calls</strong> — search for <code>LocationManager</code>, <code>TelephonyManager</code>, <code>Camera</code>, <code>Cipher</code>, <code>Runtime.exec</code></div>
+          <div>🌐 <strong>Network endpoints</strong> — look for <code>URL</code>, <code>HttpURLConnection</code>, <code>OkHttpClient</code> invocations and string constants with <code>http://</code></div>
+          <div>🔄 <strong>Reflection</strong> — <code>Class.forName</code> and <code>Method.invoke</code> may indicate dynamic code loading or obfuscation</div>
+          <div>📦 <strong>Third-party SDKs</strong> — package patterns like <code>com/google/firebase</code>, <code>com/facebook</code>, <code>okhttp3</code></div>
+          <div>🔑 <strong>Hardcoded secrets</strong> — string constants (amber) that look like API keys, tokens, or base64 blobs</div>
+        </div>
+      </section>
+
+      <section>
+        <div style="font-weight:600;margin-bottom:6px;">Syntax Highlighting Legend</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:.75rem;">
+          <div><span style="color:#b794f4;">■</span> Invoke types (staticinvoke, virtualinvoke…)</div>
+          <div><span style="color:#63b3ed;">■</span> Control flow (if, goto, return, throw…)</div>
+          <div><span style="color:#76e4f7;">■</span> Modifiers (public, static, final…)</div>
+          <div><span style="color:#9ae6b4;">■</span> Primitive types (int, void, boolean…)</div>
+          <div><span style="color:#68d391;">■</span> Class references &lt;ClassName: …&gt;</div>
+          <div><span style="color:#718096;">■</span> Comments (// …)</div>
+          <div><span style="color:#f6ad55;">■</span> String literals</div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ── Jimple Decompiler tab content ── -->
+<div id="tabJimple" style="display:none; padding:20px 24px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+    <div style="font-weight:700;font-size:1rem;color:var(--accent-no-ads);">🧩 Jimple Decompiler</div>
+    <button onclick="document.getElementById('jimpleHelpModal').style.display='flex'" style="padding:5px 12px;border-radius:6px;border:1px solid var(--card-border);background:var(--surface);color:var(--text-muted);font-size:.78rem;cursor:pointer;">❓ Help</button>
+  </div>
+
+  <!-- Soot Compiler Panel -->
+  <div class="card" style="margin-bottom:16px;">
+    <div style="font-weight:600;font-size:.85rem;margin-bottom:12px;">Decompile APK → Jimple</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+      <div>
+        <label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">APK File Path</label>
+        <div style="display:flex;gap:6px;">
+          <input id="jimpleApkPath" type="text" placeholder="/path/to/app.apk"
+            style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.8rem;" />
+          <button onclick="jimpleBrowseApk()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.75rem;cursor:pointer;">Browse</button>
+        </div>
+      </div>
+      <div>
+        <label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">Output Directory</label>
+        <div style="display:flex;gap:6px;">
+          <input id="jimpleOutputDir" type="text" placeholder="~/sootOutput"
+            style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.8rem;" />
+          <button onclick="jimpleBrowseOutput()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.75rem;cursor:pointer;">Browse</button>
+        </div>
+      </div>
+      <div>
+        <label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">Android Platforms Dir <span style="color:var(--text-muted);font-size:.7rem;">(optional)</span></label>
+        <input id="jimpleAndroidJars" type="text" placeholder="~/Android/Sdk/platforms"
+          style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:6px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.8rem;" />
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button id="jimpleRunBtn" onclick="jimpleRunSoot()" style="padding:7px 18px;border-radius:6px;background:var(--accent-no-ads);color:#fff;border:none;font-size:.82rem;font-weight:600;cursor:pointer;">▶ Run Soot</button>
+      <button id="jimpleCancelBtn" onclick="jimpleCancel()" style="display:none;padding:7px 14px;border-radius:6px;background:#ef4444;color:#fff;border:none;font-size:.82rem;cursor:pointer;">■ Cancel</button>
+      <span id="jimpleStatus" style="font-size:.78rem;color:var(--text-muted);"></span>
+    </div>
+    <!-- Soot output log -->
+    <div id="jimpleLogWrap" style="display:none;margin-top:12px;">
+      <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:4px;">Output</div>
+      <div id="jimpleLog" style="background:#1a1a2e;color:#a8d8a8;font-family:monospace;font-size:.72rem;border-radius:6px;padding:10px;height:180px;overflow-y:auto;white-space:pre-wrap;"></div>
+    </div>
+    <div id="jimpleDoneMsg" style="display:none;margin-top:8px;padding:8px 12px;border-radius:6px;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);color:#10b981;font-size:.78rem;"></div>
+  </div>
+
+  <!-- Jimple File Viewer Panel -->
+  <div class="card">
+    <div style="font-weight:600;font-size:.85rem;margin-bottom:12px;">View Jimple File</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+      <input id="jimpleViewDir" type="text" placeholder="Enter output directory to list .jimple files"
+        style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.8rem;" />
+      <button onclick="jimpleListFiles()" style="padding:6px 14px;border-radius:6px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.78rem;cursor:pointer;">Load Files</button>
+    </div>
+    <div id="jimpleFileList" style="display:none;margin-bottom:10px;">
+      <label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">Select .jimple file:</label>
+      <div style="display:flex;gap:6px;">
+        <input id="jimpleFileSearch" type="text" placeholder="Filter by class name..."
+          oninput="jimpleFilterFiles()"
+          style="flex:1;padding:5px 10px;border-radius:6px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.78rem;" />
+      </div>
+      <div id="jimpleFileItems" style="margin-top:6px;max-height:160px;overflow-y:auto;border:1px solid var(--card-border);border-radius:6px;"></div>
+    </div>
+    <!-- Code viewer -->
+    <div id="jimpleCodeWrap" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span id="jimpleCodeTitle" style="font-size:.78rem;color:var(--text-muted);font-family:monospace;"></span>
+        <button onclick="jimpleCopyCode()" style="padding:4px 10px;border-radius:5px;border:1px solid var(--card-border);background:var(--surface);color:var(--text);font-size:.72rem;cursor:pointer;">📋 Copy</button>
+      </div>
+      <div id="jimpleCodeView" style="background:#1a1a2e;border-radius:6px;padding:12px;height:450px;overflow:auto;font-family:monospace;font-size:.72rem;line-height:1.6;"></div>
+    </div>
+    <div id="jimpleViewStatus" style="font-size:.78rem;color:var(--text-muted);"></div>
+  </div>
+</div><!-- /tabJimple -->
 
 <!-- ── Settings tab content ── -->
 <div id="tabSettings" style="display:none; padding:20px 24px; max-width:640px;">
@@ -1462,6 +1759,7 @@ function switchTab(name) {
   document.getElementById('tabTools').style.display    = name === 'tools'    ? '' : 'none';
   document.getElementById('tabLogs').style.display     = name === 'logs'     ? '' : 'none';
   document.getElementById('tabFsm').style.display      = name === 'fsm'      ? '' : 'none';
+  document.getElementById('tabJimple').style.display   = name === 'jimple'   ? '' : 'none';
   document.getElementById('tabSettings').style.display = name === 'settings' ? '' : 'none';
   var chatEl = document.getElementById('tabChat');
   chatEl.style.display = name === 'chat' ? 'flex' : 'none';
@@ -1469,6 +1767,7 @@ function switchTab(name) {
   document.getElementById('tabBtnTools').classList.toggle('active', name === 'tools');
   document.getElementById('tabBtnLogs').classList.toggle('active', name === 'logs');
   document.getElementById('tabBtnFsm').classList.toggle('active', name === 'fsm');
+  document.getElementById('tabBtnJimple').classList.toggle('active', name === 'jimple');
   document.getElementById('tabBtnChat').classList.toggle('active', name === 'chat');
   document.getElementById('tabBtnSettings').classList.toggle('active', name === 'settings');
   if (name === 'tools')    initToolsTab();
@@ -2053,6 +2352,7 @@ async function loadApkBrowserDir(dirPath) {
 // ── Log Keyword Search ────────────────────────────────────────────────────────
 
 let _fsmLogEntries = []; // full entry objects from the currently loaded log
+let _kwSequence = [];   // last keyword search call-sequence: [{entry, kwIndices}] in log order
 
 // Strip special chars from a keyword, leaving only alphanumeric + underscore
 function cleanKeyword(kw) {
@@ -2113,6 +2413,9 @@ async function runKeywordSearch() {
       + summary + ' &mdash; ' + hitCount + ' / ' + total + ' keywords found</div>'
       + '<div style="margin-bottom:16px;">' + summaryRows + '</div>';
 
+    // Save sequence for Push Data to Contract
+    _kwSequence = data.sequence || [];
+
     // ── Ordered call sequence ─────────────────────────────────────────────
     var seqRows = data.sequence; // [{entry, kwIndices}] in log order
     html += '<div style="font-size:.8rem;font-weight:700;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em;">CALL SEQUENCE (' + seqRows.length + ' match' + (seqRows.length !== 1 ? 'es' : '') + ', log order)</div>';
@@ -2162,6 +2465,377 @@ async function runKeywordSearch() {
 function clearKeywordSearch() {
   document.getElementById('kwInput').value = '';
   document.getElementById('kwResults').innerHTML = '';
+  _kwSequence = [];
+}
+
+// ── FSM Contract Generator ────────────────────────────────────────────────────
+
+var DEFAULT_FSM_CONTRACT = \`// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract FSMViolationAuditor {
+    // FSM States as defined in your visualizer
+    enum FsmState { START, ADVIEW_SET, LOADED, IMPRESSION, ENGAGEMENT, DISPLAYED }
+
+    struct AppStatus {
+        FsmState currentState;
+        bool hasViolation;
+        string[] methodHistory;
+    }
+
+    mapping(string => AppStatus) private appRegistry;
+    string[] public appNames;
+    mapping(string => bool) private appExists;
+
+    event ViolationDetected(string packageName, string method, string expectedState);
+
+    function recordTransition(string memory _pkg, string memory _method) public {
+        if (!appExists[_pkg]) {
+            appNames.push(_pkg);
+            appExists[_pkg] = true;
+            appRegistry[_pkg].currentState = FsmState.START;
+        }
+
+        AppStatus storage app = appRegistry[_pkg];
+        app.methodHistory.push(_method);
+
+        // Validation Logic
+        bool valid = validate(_pkg, _method);
+
+        if (!valid) {
+            app.hasViolation = true;
+            emit ViolationDetected(_pkg, _method, "Sequence Break");
+        }
+    }
+
+    function validate(string memory _pkg, string memory _method) internal returns (bool) {
+        FsmState current = appRegistry[_pkg].currentState;
+        bytes32 m = keccak256(abi.encodePacked(_method));
+
+        // 1. ATTACH INFO -> ADVIEW_SET
+        if (m == keccak256("attachInfo")) {
+            if (current == FsmState.START || current == FsmState.ADVIEW_SET) {
+                appRegistry[_pkg].currentState = FsmState.ADVIEW_SET;
+                return true;
+            }
+        }
+        // 2. BUILD -> LOADED
+        else if (m == keccak256("build")) {
+            if (current == FsmState.ADVIEW_SET || current == FsmState.LOADED) {
+                appRegistry[_pkg].currentState = FsmState.LOADED;
+                return true;
+            }
+        }
+        // 3. ON AD LOADED -> IMPRESSION
+        else if (m == keccak256("onAdLoaded")) {
+            if (current == FsmState.LOADED || current == FsmState.IMPRESSION) {
+                appRegistry[_pkg].currentState = FsmState.IMPRESSION;
+                return true;
+            }
+        }
+        // 4. ON AD CLICKED -> ENGAGEMENT
+        else if (m == keccak256("onAdClicked")) {
+            if (current == FsmState.IMPRESSION || current == FsmState.ENGAGEMENT) {
+                appRegistry[_pkg].currentState = FsmState.ENGAGEMENT;
+                return true;
+            }
+        }
+        // 5. SHOW -> DISPLAYED
+        else if (m == keccak256("show")) {
+            if (current == FsmState.ENGAGEMENT || current == FsmState.DISPLAYED) {
+                appRegistry[_pkg].currentState = FsmState.DISPLAYED;
+                return true;
+            }
+        }
+
+        return false; // Any other transition is a violation
+    }
+
+    function getViolationStatus(string memory _pkg) public view returns (bool) {
+        return appRegistry[_pkg].hasViolation;
+    }
+
+    function getAllApps() public view returns (string[] memory) {
+        return appNames;
+    }
+
+    function getAppMethods(string memory _pkg) public view returns (string[] memory) {
+        return appRegistry[_pkg].methodHistory;
+    }
+}\`;
+
+function loadDefaultFsmContract() {
+  var source = document.getElementById('fsmContractSource');
+  var copyBtn = document.getElementById('fsmContractCopyBtn');
+  var deployBtn = document.getElementById('fsmDeployBtn');
+  var status = document.getElementById('fsmContractGenStatus');
+  source.value = DEFAULT_FSM_CONTRACT;
+  source.removeAttribute('readonly');
+  copyBtn.style.display = '';
+  deployBtn.disabled = false;
+  status.style.color = 'var(--text-muted)';
+  status.textContent = 'Default contract loaded.';
+}
+
+function openFsmContractModal() {
+  document.getElementById('fsmContractModal').classList.add('open');
+}
+
+function openFsmContractModalPush() {
+  document.getElementById('fsmContractModal').classList.add('open');
+  // Scroll the modal body to the push section
+  setTimeout(function() {
+    var el = document.getElementById('fsmPushSection');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, 50);
+}
+
+function closeFsmContractModal() {
+  document.getElementById('fsmContractModal').classList.remove('open');
+}
+
+async function generateFsmContract() {
+  var btn = document.getElementById('fsmContractGenBtn');
+  var status = document.getElementById('fsmContractGenStatus');
+  var source = document.getElementById('fsmContractSource');
+  var copyBtn = document.getElementById('fsmContractCopyBtn');
+  var deployBtn = document.getElementById('fsmDeployBtn');
+
+  // Collect log summary
+  var logFile = _currentLogFile;
+  var appEntries = _appLogEntries.length ? _appLogEntries : [];
+  var keywords = document.getElementById('kwInput').value
+    .split('\\n').map(function(k){ return k.trim(); }).filter(function(k){ return k.length > 0; });
+
+  if (!logFile && !appEntries.length) {
+    status.textContent = 'Load a log file first.';
+    status.style.color = '#ef4444';
+    return;
+  }
+
+  btn.disabled = true;
+  status.style.color = 'var(--text-muted)';
+  status.textContent = 'Generating contract…';
+  source.value = '';
+  copyBtn.style.display = 'none';
+  deployBtn.disabled = true;
+
+  try {
+    var body = { keywords: keywords };
+    if (logFile) body.logFile = logFile;
+    if (appEntries.length) {
+      // Send a compact summary: unique method signatures (max 200)
+      var unique = appEntries.filter(function(e){ return !e.duplicate; }).slice(0, 200);
+      body.logSummary = unique.map(function(e){
+        return e.className ? e.className + '#' + e.methodName + '(' + e.args + ')' : e.sig;
+      });
+    }
+
+    var data = await api('/api/fsm/generate-contract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (data.error) throw new Error(data.error);
+
+    source.value = data.source;
+    source.removeAttribute('readonly');
+    copyBtn.style.display = '';
+    deployBtn.disabled = false;
+    status.style.color = '#22c55e';
+    status.textContent = 'Contract generated.';
+  } catch(err) {
+    status.style.color = '#ef4444';
+    status.textContent = 'Error: ' + err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function copyFsmContract() {
+  var source = document.getElementById('fsmContractSource').value;
+  if (!source) return;
+  navigator.clipboard.writeText(source).then(function() {
+    var btn = document.getElementById('fsmContractCopyBtn');
+    var orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(function(){ btn.textContent = orig; }, 1500);
+  });
+}
+
+async function loadEthAccounts() {
+  var url = document.getElementById('ganacheUrl').value.trim() || 'http://127.0.0.1:7545';
+  var sel = document.getElementById('ethAccountSelect');
+  sel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    var data = await api('/api/eth/accounts?url=' + encodeURIComponent(url));
+    if (data.error) throw new Error(data.error);
+    sel.innerHTML = '<option value="">— select account —</option>';
+    (data.accounts || []).forEach(function(addr) {
+      var opt = document.createElement('option');
+      opt.value = addr;
+      opt.textContent = addr;
+      sel.appendChild(opt);
+    });
+    if (data.accounts && data.accounts.length) sel.value = data.accounts[0];
+  } catch(err) {
+    sel.innerHTML = '<option value="">Error: ' + escHtml(err.message) + '</option>';
+  }
+}
+
+async function deployFsmContract() {
+  var btn = document.getElementById('fsmDeployBtn');
+  var status = document.getElementById('fsmDeployStatus');
+  var result = document.getElementById('fsmContractResult');
+  var addrEl = document.getElementById('fsmContractAddress');
+  var txEl = document.getElementById('fsmContractTxHash');
+
+  var source = document.getElementById('fsmContractSource').value.trim();
+  var from = document.getElementById('ethAccountSelect').value.trim();
+  var ganacheUrl = document.getElementById('ganacheUrl').value.trim() || 'http://127.0.0.1:7545';
+
+  if (!source) { status.textContent = 'Generate a contract first.'; status.style.color = '#ef4444'; return; }
+  if (!from) { status.textContent = 'Select an Ethereum account.'; status.style.color = '#ef4444'; return; }
+
+  btn.disabled = true;
+  result.style.display = 'none';
+  status.style.color = 'var(--text-muted)';
+  status.textContent = 'Compiling & deploying…';
+
+  try {
+    var data = await api('/api/eth/deploy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, from, ganacheUrl }),
+    });
+
+    if (data.error) throw new Error(data.error);
+
+    addrEl.textContent = data.contractAddress;
+    txEl.textContent = 'Tx: ' + data.txHash;
+    result.style.display = '';
+    // Auto-fill the push section address input
+    document.getElementById('fsmPushContractAddr').value = data.contractAddress;
+    status.style.color = '#22c55e';
+    status.textContent = 'Deployed successfully!';
+  } catch(err) {
+    status.style.color = '#ef4444';
+    status.textContent = 'Deploy failed: ' + err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function copyFsmContractAddress() {
+  var addr = document.getElementById('fsmContractAddress').textContent;
+  if (!addr) return;
+  navigator.clipboard.writeText(addr).then(function() {
+    var btns = document.querySelectorAll('#fsmContractResult button');
+    btns.forEach(function(b){ if(b.onclick && b.onclick.toString().includes('copyFsmContractAddress')){
+      var orig = b.textContent; b.textContent = 'Copied!';
+      setTimeout(function(){ b.textContent = orig; }, 1500);
+    }});
+  });
+}
+
+async function pushDataToContract() {
+  var btn = document.getElementById('fsmPushDataBtn');
+  var status = document.getElementById('fsmPushStatus');
+  var progress = document.getElementById('fsmPushProgress');
+  var bar = document.getElementById('fsmPushBar');
+  var count = document.getElementById('fsmPushCount');
+  var log = document.getElementById('fsmPushLog');
+
+  var contractAddress = document.getElementById('fsmPushContractAddr').value.trim();
+  var from = document.getElementById('ethAccountSelect').value.trim();
+  var ganacheUrl = document.getElementById('ganacheUrl').value.trim() || 'http://127.0.0.1:7545';
+
+  if (!contractAddress) { status.textContent = 'No contract address — deploy first or paste one.'; status.style.color = '#ef4444'; return; }
+  if (!from) { status.textContent = 'Select an Ethereum account first.'; status.style.color = '#ef4444'; return; }
+
+  // Package name: the app selected in the App dropdown (same source as the viewer)
+  var pkg = document.getElementById('logAppSelect').value.trim();
+  if (!pkg) { status.textContent = 'Select an app from the App dropdown first.'; status.style.color = '#ef4444'; return; }
+
+  // Methods: derived from the keyword search call sequence (filtered output)
+  if (!_kwSequence.length) {
+    status.textContent = 'Run a Keyword Search first — methods are taken from the call sequence results.';
+    status.style.color = '#ef4444';
+    return;
+  }
+
+  // Build calls: one per sequence row, method = methodName from the entry
+  var calls = [];
+  for (var i = 0; i < _kwSequence.length; i++) {
+    var e = _kwSequence[i].entry;
+    if (e && e.methodName) {
+      calls.push({ pkg: pkg, method: e.methodName });
+    }
+  }
+
+  if (!calls.length) {
+    status.textContent = 'No method entries in the call sequence.';
+    status.style.color = '#ef4444';
+    return;
+  }
+
+  btn.disabled = true;
+  status.style.color = 'var(--text-muted)';
+  status.textContent = 'Pushing ' + calls.length + ' call(s)…';
+  progress.style.display = '';
+  bar.style.width = '0%';
+  count.textContent = '0 / ' + calls.length;
+  log.innerHTML = '';
+
+  var done = 0, errors = 0;
+
+  function appendLog(text, color) {
+    var line = document.createElement('div');
+    line.style.color = color || 'var(--text)';
+    line.textContent = text;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  // Send in batches of 20 to avoid overwhelming Ganache
+  var BATCH = 20;
+  for (var i = 0; i < calls.length; i += BATCH) {
+    var batch = calls.slice(i, i + BATCH);
+    try {
+      var result = await api('/api/eth/push-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contractAddress, from, ganacheUrl, calls: batch }),
+      });
+      for (var j = 0; j < result.results.length; j++) {
+        var r = result.results[j];
+        done++;
+        if (r.error) {
+          errors++;
+          appendLog('#' + (i + j + 1) + ' ' + r.pkg + ' → ' + r.method + '  ✗ ' + r.error, '#ef4444');
+        } else {
+          appendLog('#' + (i + j + 1) + ' ' + r.pkg + ' → ' + r.method + '  ✓', '#22c55e');
+        }
+      }
+    } catch(err) {
+      errors++;
+      appendLog('Batch error: ' + err.message, '#ef4444');
+      done += batch.length;
+    }
+    bar.style.width = Math.round((done / calls.length) * 100) + '%';
+    count.textContent = done + ' / ' + calls.length;
+  }
+
+  bar.style.width = '100%';
+  btn.disabled = false;
+  if (errors === 0) {
+    status.style.color = '#22c55e';
+    status.textContent = 'All ' + calls.length + ' call(s) pushed successfully.';
+  } else {
+    status.style.color = '#f59e0b';
+    status.textContent = done + ' pushed, ' + errors + ' error(s).';
+  }
 }
 
 function loadModelImage() {
@@ -2484,6 +3158,298 @@ function fsmRenderResults(data) {
   }
   html += '</div>';
   el.innerHTML = html;
+}
+
+// ── Jimple Decompiler ─────────────────────────────────────────────────────────
+
+var _jimpleAllFiles = [];   // [{name, path}] full list from last load
+var _jimpleSootCtrl = null; // AbortController for SSE
+
+function jimpleBrowseApk() {
+  jimpleApkBrowseLoad(document.getElementById('jimpleApkPath').value.trim() || '');
+  document.getElementById('jimpleApkBrowserModal').style.display = 'flex';
+}
+
+function jimpleApkBrowseLoad(dir) {
+  var url = '/api/browse-apks?dir=' + encodeURIComponent(dir || '');
+  fetch(url).then(function(r){ return r.json(); }).then(function(d) {
+    document.getElementById('jimpleApkBrowserPath').textContent = d.current;
+    var list = document.getElementById('jimpleApkBrowserList');
+    list.innerHTML = '';
+    if (d.parent) {
+      var up = document.createElement('div');
+      up.className = 'dir-item up';
+      up.innerHTML = '<span class="icon">⬆</span><span>.. (up)</span>';
+      up.addEventListener('click', function(){ jimpleApkBrowseLoad(d.parent); });
+      list.appendChild(up);
+    }
+    d.dirs.forEach(function(dir) {
+      var el = document.createElement('div');
+      el.className = 'dir-item';
+      el.innerHTML = '<span class="icon">📁</span><span>' + dir.name + '</span>';
+      el.addEventListener('click', function(){ jimpleApkBrowseLoad(dir.path); });
+      list.appendChild(el);
+    });
+    d.apks.forEach(function(apk) {
+      var el = document.createElement('div');
+      el.className = 'dir-item';
+      el.innerHTML = '<span class="icon">📦</span><span style="color:var(--accent-no-ads);">' + apk.name + '</span>';
+      el.addEventListener('click', function(){
+        document.getElementById('jimpleApkPath').value = apk.path;
+        document.getElementById('jimpleApkBrowserModal').style.display = 'none';
+      });
+      list.appendChild(el);
+    });
+    if (!d.dirs.length && !d.apks.length) {
+      list.innerHTML = '<div class="empty">No APK files or subdirectories here.</div>';
+    }
+  }).catch(function(e){ document.getElementById('jimpleApkBrowserList').innerHTML = '<div class="empty">Error: ' + e.message + '</div>'; });
+}
+
+function jimpleBrowseOutput() {
+  // Open the directory browser modal and on select populate output dir
+  _jimpleBrowseTarget = 'output';
+  openBrowserFor('jimpleOutputDir');
+}
+
+var _jimpleBrowseTarget = null;
+
+function openBrowserFor(inputId) {
+  // Reuse the existing directory browser modal
+  var _jimpleBrowseInputId = inputId; // unused beyond setting override
+  var startPath = document.getElementById(inputId).value.trim() || '';
+  loadBrowserDir(startPath || null);
+  document.getElementById('browserModal').classList.add('open');
+  // Override selectDir to write back to our input
+  _jimpleBrowserOverride = inputId;
+}
+
+var _jimpleBrowserOverride = null;
+
+// Patch selectDir to support jimple target
+var _origSelectDir = null;
+(function() {
+  // defer until DOM ready
+  setTimeout(function() {
+    _origSelectDir = selectDir;
+    selectDir = function() {
+      if (_jimpleBrowserOverride) {
+        var el = document.getElementById(_jimpleBrowserOverride);
+        if (el && currentBrowsePath) el.value = currentBrowsePath;
+        _jimpleBrowserOverride = null;
+        closeBrowser();
+      } else {
+        _origSelectDir();
+      }
+    };
+  }, 0);
+})();
+
+function jimpleRunSoot() {
+  var apkPath   = document.getElementById('jimpleApkPath').value.trim();
+  var outputDir = document.getElementById('jimpleOutputDir').value.trim();
+  var jarsPath  = document.getElementById('jimpleAndroidJars').value.trim();
+  if (!apkPath) { alert('APK file path is required.'); return; }
+
+  var logEl   = document.getElementById('jimpleLog');
+  var logWrap = document.getElementById('jimpleLogWrap');
+  var doneMsg = document.getElementById('jimpleDoneMsg');
+  var runBtn  = document.getElementById('jimpleRunBtn');
+  var cancelBtn = document.getElementById('jimpleCancelBtn');
+  var statusEl  = document.getElementById('jimpleStatus');
+
+  logEl.textContent = '';
+  logWrap.style.display = 'block';
+  doneMsg.style.display = 'none';
+  runBtn.disabled = true;
+  cancelBtn.style.display = 'inline-block';
+  statusEl.textContent = 'Running Soot…';
+
+  _jimpleSootCtrl = new AbortController();
+
+  fetch('/api/soot/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apkPath: apkPath, outputDir: outputDir, androidJarsPath: jarsPath }),
+    signal: _jimpleSootCtrl.signal
+  }).then(function(res) {
+    var reader = res.body.getReader();
+    var decoder = new TextDecoder();
+    var buf = '';
+    function pump() {
+      return reader.read().then(function(chunk) {
+        if (chunk.done) {
+          runBtn.disabled = false;
+          cancelBtn.style.display = 'none';
+          statusEl.textContent = '';
+          return;
+        }
+        buf += decoder.decode(chunk.value, { stream: true });
+        var lines = buf.split('\\n');
+        buf = lines.pop();
+        lines.forEach(function(line) {
+          if (!line.startsWith('data: ')) return;
+          try {
+            var ev = JSON.parse(line.slice(6));
+            if (ev.type === 'log') {
+              var span = document.createElement('span');
+              span.style.color = ev.message && ev.message.toLowerCase().includes('error') ? '#f87171' : '#a8d8a8';
+              span.textContent = ev.message + '\\n';
+              logEl.appendChild(span);
+              logEl.scrollTop = logEl.scrollHeight;
+            } else if (ev.type === 'done') {
+              runBtn.disabled = false;
+              cancelBtn.style.display = 'none';
+              statusEl.textContent = '';
+              doneMsg.style.display = 'block';
+              var outDir = outputDir || '~/sootOutput';
+              doneMsg.textContent = '✓ Soot completed. Jimple files written to: ' + outDir;
+              document.getElementById('jimpleViewDir').value = outDir;
+              jimpleListFiles();
+            } else if (ev.type === 'error') {
+              runBtn.disabled = false;
+              cancelBtn.style.display = 'none';
+              statusEl.textContent = 'Error: ' + ev.message;
+            }
+          } catch(e) {}
+        });
+        return pump();
+      });
+    }
+    return pump();
+  }).catch(function(e) {
+    if (e.name !== 'AbortError') {
+      statusEl.textContent = 'Error: ' + e.message;
+    }
+    runBtn.disabled = false;
+    cancelBtn.style.display = 'none';
+  });
+}
+
+function jimpleCancel() {
+  if (_jimpleSootCtrl) _jimpleSootCtrl.abort();
+  document.getElementById('jimpleStatus').textContent = 'Cancelled.';
+  document.getElementById('jimpleRunBtn').disabled = false;
+  document.getElementById('jimpleCancelBtn').style.display = 'none';
+}
+
+function jimpleListFiles() {
+  var dir = document.getElementById('jimpleViewDir').value.trim();
+  if (!dir) return;
+  document.getElementById('jimpleViewStatus').textContent = 'Loading…';
+  document.getElementById('jimpleFileList').style.display = 'none';
+
+  fetch('/api/soot/list-jimple', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath: dir })
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d) {
+    if (d.error) { document.getElementById('jimpleViewStatus').textContent = 'Error: ' + d.error; return; }
+    _jimpleAllFiles = d.files || [];
+    document.getElementById('jimpleViewStatus').textContent = _jimpleAllFiles.length + ' .jimple file(s) found';
+    document.getElementById('jimpleFileSearch').value = '';
+    document.getElementById('jimpleFileList').style.display = 'block';
+    jimpleRenderFileList(_jimpleAllFiles);
+  })
+  .catch(function(e){ document.getElementById('jimpleViewStatus').textContent = 'Error: ' + e.message; });
+}
+
+function jimpleFilterFiles() {
+  var q = document.getElementById('jimpleFileSearch').value.toLowerCase();
+  var filtered = _jimpleAllFiles.filter(function(f){ return f.name.toLowerCase().includes(q); });
+  jimpleRenderFileList(filtered);
+}
+
+function jimpleRenderFileList(files) {
+  var el = document.getElementById('jimpleFileItems');
+  el.innerHTML = '';
+  if (!files.length) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'padding:8px;font-size:.75rem;color:var(--text-muted);';
+    empty.textContent = 'No files match.';
+    el.appendChild(empty);
+    return;
+  }
+  files.forEach(function(f) {
+    var item = document.createElement('div');
+    item.style.cssText = 'padding:6px 10px;cursor:pointer;font-size:.75rem;font-family:monospace;border-bottom:1px solid var(--card-border);color:var(--text);';
+    item.textContent = f.name;
+    item.addEventListener('mouseover', function(){ item.style.background = 'var(--surface)'; });
+    item.addEventListener('mouseout',  function(){ item.style.background = ''; });
+    item.addEventListener('click',     function(){ jimpleLoadFile(f.name); });
+    el.appendChild(item);
+  });
+}
+
+var _jimpleCurrentCode = '';
+
+function jimpleLoadFile(name) {
+  var dir = document.getElementById('jimpleViewDir').value.trim();
+  document.getElementById('jimpleViewStatus').textContent = 'Loading ' + name + '…';
+  document.getElementById('jimpleCodeWrap').style.display = 'none';
+
+  fetch('/api/soot/read-jimple', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath: dir, className: name })
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d) {
+    if (d.error) { document.getElementById('jimpleViewStatus').textContent = 'Error: ' + d.error; return; }
+    _jimpleCurrentCode = d.content || '';
+    document.getElementById('jimpleCodeTitle').textContent = name;
+    document.getElementById('jimpleCodeView').innerHTML = jimpleHighlight(_jimpleCurrentCode);
+    document.getElementById('jimpleCodeWrap').style.display = 'block';
+    document.getElementById('jimpleViewStatus').textContent = '';
+  })
+  .catch(function(e){ document.getElementById('jimpleViewStatus').textContent = 'Error: ' + e.message; });
+}
+
+function jimpleCopyCode() {
+  if (!_jimpleCurrentCode) return;
+  navigator.clipboard.writeText(_jimpleCurrentCode).then(function(){
+    var btn = document.querySelector('#jimpleCodeWrap button');
+    var orig = btn.textContent;
+    btn.textContent = '✓ Copied';
+    setTimeout(function(){ btn.textContent = orig; }, 1500);
+  });
+}
+
+function jimpleHighlight(code) {
+  var lines = code.split('\\n');
+  return lines.map(function(line, i) {
+    var num = '<span style="color:#4a5568;user-select:none;display:inline-block;width:3em;text-align:right;padding-right:1em;">' + (i+1) + '</span>';
+    return '<div>' + num + jimpleHighlightLine(escapeHtml(line)) + '</div>';
+  }).join('');
+}
+
+function jimpleHighlightLine(line) {
+  // Apply syntax highlighting via regex replacements in priority order
+  // Comments: replace // ... to end of line
+  var commentIdx = line.indexOf('//');
+  if (commentIdx >= 0) {
+    line = line.slice(0, commentIdx) + '<span style="color:#718096;font-style:italic;">' + line.slice(commentIdx) + '</span>';
+    return line; // rest of replacements irrelevant inside comment
+  }
+  // String literals
+  line = line.replace(/"([^"]*)"/g, '<span style="color:#f6ad55;">"$1"</span>');
+  // Invoke types
+  line = line.replace(/\b(staticinvoke|specialinvoke|virtualinvoke|interfaceinvoke)\b/g, '<span style="color:#b794f4;">$1</span>');
+  // Keywords
+  line = line.replace(/\b(if|goto|return|throw|nop|new|instanceof|cast|switch|case|default|catch|newarray|newmultiarray)\b/g, '<span style="color:#63b3ed;">$1</span>');
+  // Modifiers
+  line = line.replace(/\b(public|private|protected|static|final|abstract|synchronized|native|transient|volatile)\b/g, '<span style="color:#76e4f7;">$1</span>');
+  // Primitive types
+  line = line.replace(/\b(void|int|long|boolean|float|double|byte|short|char)\b/g, '<span style="color:#9ae6b4;">$1</span>');
+  // Class refs <...> (already HTML-escaped as &lt;...&gt;)
+  line = line.replace(/(&lt;[^&]*&gt;)/g, '<span style="color:#68d391;">$1</span>');
+  return line;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 // ── AI Chat ───────────────────────────────────────────────────────────────────
@@ -3464,6 +4430,359 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // POST /api/fsm/generate-contract — use AI to generate Solidity FSM smart contract
+  if (req.method === "POST" && pathname === "/api/fsm/generate-contract") {
+    const body = await readBody(req);
+    let payload;
+    try { payload = JSON.parse(body); } catch { return jsonResponse(res, { error: "Invalid JSON" }, 400); }
+
+    const { keywords = [], logFile, logSummary = [] } = payload;
+
+    // Build log context: either from logSummary passed by client, or read from logFile
+    let methodList = logSummary;
+    if (!methodList.length && logFile) {
+      try {
+        const absLog = path.resolve(logFile.replace(/^~/, os.homedir()));
+        const entries = parseLogEntries(absLog);
+        const unique = entries.filter(e => !e.duplicate).slice(0, 200);
+        methodList = unique.map(e =>
+          e.className ? `${e.className}#${e.methodName}(${e.args})` : e.sig
+        );
+      } catch (err) {
+        return jsonResponse(res, { error: "Log read failed: " + err.message }, 500);
+      }
+    }
+
+    const settings = loadSettings();
+    const owUrl   = (settings.openwebui_url || "http://localhost:3000").replace(/\/$/, "");
+    const owKey   = settings.openwebui_key  || "";
+    const owModel = settings.openwebui_model || "";
+    if (!owModel) return jsonResponse(res, { error: "No model configured — set one in Settings." }, 400);
+
+    const kwBlock = keywords.length
+      ? "Keywords of interest (method names):\n" + keywords.map(k => "  - " + k).join("\n")
+      : "";
+    const methodBlock = methodList.length
+      ? "Observed method calls (up to 200 unique):\n" + methodList.slice(0, 200).map(m => "  " + m).join("\n")
+      : "(No method list provided)";
+
+    const prompt = `You are an expert Solidity developer. Generate a Solidity ^0.8.0 smart contract that models a Finite State Machine (FSM) violation auditor for an Android application, based on the observed method calls and keywords provided below.
+
+The contract MUST follow this exact structure and pattern (adapt states, methods, and logic to match the provided data):
+
+\`\`\`
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract FSMViolationAuditor {
+    // FSM States derived from the observed lifecycle
+    enum FsmState { START, STATE_1, STATE_2, ... }
+
+    struct AppStatus {
+        FsmState currentState;
+        bool hasViolation;
+        string[] methodHistory;
+    }
+
+    mapping(string => AppStatus) private appRegistry;
+    string[] public appNames;
+    mapping(string => bool) private appExists;
+
+    event ViolationDetected(string packageName, string method, string expectedState);
+
+    function recordTransition(string memory _pkg, string memory _method) public {
+        if (!appExists[_pkg]) {
+            appNames.push(_pkg);
+            appExists[_pkg] = true;
+            appRegistry[_pkg].currentState = FsmState.START;
+        }
+        AppStatus storage app = appRegistry[_pkg];
+        app.methodHistory.push(_method);
+        bool valid = validate(_pkg, _method);
+        if (!valid) {
+            app.hasViolation = true;
+            emit ViolationDetected(_pkg, _method, "Sequence Break");
+        }
+    }
+
+    function validate(string memory _pkg, string memory _method) internal returns (bool) {
+        FsmState current = appRegistry[_pkg].currentState;
+        bytes32 m = keccak256(abi.encodePacked(_method));
+
+        // Each transition: if method hash matches AND current state is valid, advance state and return true
+        if (m == keccak256("methodA")) {
+            if (current == FsmState.START || current == FsmState.STATE_1) {
+                appRegistry[_pkg].currentState = FsmState.STATE_1;
+                return true;
+            }
+        }
+        // ... add one block per method/transition ...
+
+        return false; // Any other transition is a violation
+    }
+
+    function getViolationStatus(string memory _pkg) public view returns (bool) {
+        return appRegistry[_pkg].hasViolation;
+    }
+
+    function getAllApps() public view returns (string[] memory) {
+        return appNames;
+    }
+
+    function getAppMethods(string memory _pkg) public view returns (string[] memory) {
+        return appRegistry[_pkg].methodHistory;
+    }
+}
+\`\`\`
+
+Rules you MUST follow:
+- Name the contract FSMViolationAuditor.
+- Derive the FsmState enum values from the observed methods: START is always first; each subsequent state name should reflect the lifecycle stage triggered by the corresponding method.
+- Each keyword/method of interest gets its own if/else-if block in validate(), using keccak256 hash comparison.
+- The validate() function uses the pattern: check method hash → check current state is a valid predecessor → advance state → return true; otherwise fall through to return false.
+- Use ONLY the methods listed in the keywords and observed calls; do not invent extra methods.
+- Preserve all four public/view functions: recordTransition, getViolationStatus, getAllApps, getAppMethods.
+- No constructor needed unless required for initialization.
+
+${kwBlock}
+
+${methodBlock}
+
+IMPORTANT: The contract will be compiled with solc targeting the London EVM. Do NOT use any features introduced after London (no PUSH0, no transient storage, no mcopy). Use \`pragma solidity ^0.8.0;\` exactly.
+
+Return ONLY the Solidity source code. No markdown, no code fences, no explanation. Start directly with // SPDX-License-Identifier: MIT`;
+
+    try {
+      const owRes = await fetch(owUrl + "/api/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(owKey ? { "Authorization": "Bearer " + owKey } : {}),
+        },
+        body: JSON.stringify({
+          model: owModel,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      if (!owRes.ok) {
+        const errText = await owRes.text();
+        return jsonResponse(res, { error: "AI error " + owRes.status + ": " + errText.slice(0, 300) }, 502);
+      }
+      const owData = await owRes.json();
+      let source = (owData.choices[0].message.content || "").trim();
+      // Strip markdown code fences if present
+      source = source.replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
+      return jsonResponse(res, { source });
+    } catch (err) {
+      return jsonResponse(res, { error: "Generation failed: " + err.message }, 500);
+    }
+  }
+
+  // GET /api/eth/accounts?url=... — list Ganache accounts via eth_accounts JSON-RPC
+  if (req.method === "GET" && pathname === "/api/eth/accounts") {
+    const ganacheUrl = reqUrl.searchParams.get("url") || "http://127.0.0.1:7545";
+    try {
+      const rpcRes = await fetch(ganacheUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "eth_accounts", params: [], id: 1 }),
+      });
+      const rpcData = await rpcRes.json();
+      if (rpcData.error) return jsonResponse(res, { error: rpcData.error.message }, 502);
+      return jsonResponse(res, { accounts: rpcData.result || [] });
+    } catch (err) {
+      return jsonResponse(res, { error: "Cannot reach Ganache at " + ganacheUrl + ": " + err.message }, 502);
+    }
+  }
+
+  // POST /api/eth/push-data — call recordTransition(pkg, method) for each log entry
+  if (req.method === "POST" && pathname === "/api/eth/push-data") {
+    const body = await readBody(req);
+    let payload;
+    try { payload = JSON.parse(body); } catch { return jsonResponse(res, { error: "Invalid JSON" }, 400); }
+
+    const { contractAddress, from, ganacheUrl = "http://127.0.0.1:7545", calls = [] } = payload;
+    if (!contractAddress) return jsonResponse(res, { error: "Missing contractAddress" }, 400);
+    if (!from)            return jsonResponse(res, { error: "Missing from address" }, 400);
+    if (!calls.length)    return jsonResponse(res, { error: "No calls provided" }, 400);
+
+    // ABI-encode recordTransition(string,string) without any external library.
+    // Uses js-sha3 (bundled with solc) for keccak256.
+    const sha3 = require("js-sha3");
+    const SELECTOR = Buffer.from(sha3.keccak256("recordTransition(string,string)"), "hex").slice(0, 4);
+
+    function encodeRecordTransition(pkg, method) {
+      function encodeString(s) {
+        const strBuf = Buffer.from(s, "utf8");
+        const lenSlot = Buffer.alloc(32);
+        lenSlot.writeBigUInt64BE(BigInt(strBuf.length), 24);
+        const dataPad = Buffer.alloc(Math.ceil(strBuf.length / 32) * 32);
+        strBuf.copy(dataPad);
+        return Buffer.concat([lenSlot, dataPad]);
+      }
+      const enc1 = encodeString(pkg);
+      const enc2 = encodeString(method);
+      // offset1 = 64 (two 32-byte offsets before data), offset2 = 64 + enc1.length
+      const off1 = Buffer.alloc(32); off1.writeBigUInt64BE(64n, 24);
+      const off2 = Buffer.alloc(32); off2.writeBigUInt64BE(BigInt(64 + enc1.length), 24);
+      return "0x" + Buffer.concat([SELECTOR, off1, off2, enc1, enc2]).toString("hex");
+    }
+
+    // Fetch current nonce once, increment locally per tx
+    let nonceHex, gasPrice;
+    try {
+      const [nr, gr] = await Promise.all([
+        fetch(ganacheUrl, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", method: "eth_getTransactionCount", params: [from, "pending"], id: 1 }) }),
+        fetch(ganacheUrl, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", method: "eth_gasPrice", params: [], id: 2 }) }),
+      ]);
+      const nd = await nr.json(); const gd = await gr.json();
+      if (nd.error) throw new Error(nd.error.message);
+      nonceHex = nd.result;
+      gasPrice = gd.result;
+    } catch (err) {
+      return jsonResponse(res, { error: "Failed to get nonce/gasPrice: " + err.message }, 502);
+    }
+
+    let nonce = parseInt(nonceHex, 16);
+    const results = [];
+
+    for (const { pkg, method } of calls) {
+      const calldata = encodeRecordTransition(String(pkg), String(method));
+      const nonceStr = "0x" + nonce.toString(16);
+      try {
+        const txRes = await fetch(ganacheUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0", method: "eth_sendTransaction",
+            // 0x7A120 = 500,000 gas — enough for string storage + array push on new packages
+            params: [{ from, to: contractAddress, gas: "0x7A120", gasPrice, nonce: nonceStr, data: calldata }],
+            id: 10 + nonce,
+          }),
+        });
+        const txData = await txRes.json();
+        if (txData.error) {
+          // Even on EVM revert / out-of-gas Ganache mines the tx and increments the nonce.
+          // Re-fetch the real nonce so subsequent txs stay in sync.
+          try {
+            const nr = await fetch(ganacheUrl, { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ jsonrpc: "2.0", method: "eth_getTransactionCount", params: [from, "pending"], id: 99 }) });
+            const nd = await nr.json();
+            if (nd.result) nonce = parseInt(nd.result, 16);
+          } catch { nonce++; } // fallback: just increment
+          results.push({ pkg, method, error: txData.error.message });
+        } else {
+          nonce++;
+          results.push({ pkg, method, txHash: txData.result });
+        }
+      } catch (err) {
+        results.push({ pkg, method, error: err.message });
+      }
+    }
+
+    return jsonResponse(res, { results });
+  }
+
+  // POST /api/eth/deploy — compile Solidity with solc and deploy to Ganache
+  if (req.method === "POST" && pathname === "/api/eth/deploy") {
+    const body = await readBody(req);
+    let payload;
+    try { payload = JSON.parse(body); } catch { return jsonResponse(res, { error: "Invalid JSON" }, 400); }
+
+    const { source, from, ganacheUrl = "http://127.0.0.1:7545" } = payload;
+    if (!source) return jsonResponse(res, { error: "Missing source" }, 400);
+    if (!from)   return jsonResponse(res, { error: "Missing from address" }, 400);
+
+    // Compile with solc
+    let bytecode;
+    try {
+      const solc = require("solc");
+      const input = {
+        language: "Solidity",
+        sources: { "FSMContract.sol": { content: source } },
+        settings: { evmVersion: "london", outputSelection: { "*": { "*": ["abi", "evm.bytecode"] } } },
+      };
+      const output = JSON.parse(solc.compile(JSON.stringify(input)));
+      if (output.errors) {
+        const fatal = output.errors.filter(e => e.severity === "error");
+        if (fatal.length) {
+          return jsonResponse(res, { error: "Compilation error: " + fatal[0].formattedMessage }, 400);
+        }
+      }
+      // Find the first contract
+      const contracts = output.contracts["FSMContract.sol"];
+      const contractName = Object.keys(contracts)[0];
+      if (!contractName) return jsonResponse(res, { error: "No contract found in compiled output" }, 400);
+      bytecode = contracts[contractName].evm.bytecode.object;
+      if (!bytecode) return jsonResponse(res, { error: "Empty bytecode — check contract" }, 400);
+    } catch (err) {
+      return jsonResponse(res, { error: "Compile failed: " + err.message }, 500);
+    }
+
+    // Get nonce and gas price from Ganache
+    let nonce, gasPrice;
+    try {
+      const [nonceRes, gpRes] = await Promise.all([
+        fetch(ganacheUrl, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", method: "eth_getTransactionCount", params: [from, "latest"], id: 2 }),
+        }),
+        fetch(ganacheUrl, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", method: "eth_gasPrice", params: [], id: 3 }),
+        }),
+      ]);
+      const nonceData = await nonceRes.json();
+      const gpData = await gpRes.json();
+      nonce = nonceData.result;
+      gasPrice = gpData.result;
+    } catch (err) {
+      return jsonResponse(res, { error: "Failed to get nonce/gasPrice: " + err.message }, 502);
+    }
+
+    // Send deployment transaction using Ganache's unlocked account (eth_sendTransaction)
+    let txHash;
+    try {
+      const txRes = await fetch(ganacheUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", method: "eth_sendTransaction",
+          params: [{ from, gas: "0x4C4B40", gasPrice, nonce, data: "0x" + bytecode }],
+          id: 4,
+        }),
+      });
+      const txData = await txRes.json();
+      if (txData.error) return jsonResponse(res, { error: "Transaction error: " + txData.error.message }, 502);
+      txHash = txData.result;
+    } catch (err) {
+      return jsonResponse(res, { error: "Deploy transaction failed: " + err.message }, 502);
+    }
+
+    // Poll for receipt (up to 30s)
+    let contractAddress = null;
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      try {
+        const rcptRes = await fetch(ganacheUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", method: "eth_getTransactionReceipt", params: [txHash], id: 5 }),
+        });
+        const rcptData = await rcptRes.json();
+        if (rcptData.result && rcptData.result.contractAddress) {
+          contractAddress = rcptData.result.contractAddress;
+          break;
+        }
+      } catch { /* keep polling */ }
+    }
+
+    if (!contractAddress) return jsonResponse(res, { error: "Timed out waiting for deployment receipt. Tx: " + txHash }, 504);
+    return jsonResponse(res, { contractAddress, txHash });
+  }
+
   // POST /api/fsm/analyze — extract FSM from image via Claude, scan log for violations
   if (req.method === "POST" && pathname === "/api/fsm/analyze") {
     const body = await readBody(req);
@@ -3669,6 +4988,153 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(502, { "Content-Type": "text/plain" });
       res.end("Connection failed: " + err.message);
     }
+    return;
+  }
+
+  // ── Soot / Jimple routes ───────────────────────────────────────────────────
+
+  // POST /api/soot/run — run Soot on APK → Jimple (SSE stream)
+  if (req.method === "POST" && pathname === "/api/soot/run") {
+    let body = "";
+    req.on("data", d => (body += d));
+    req.on("end", () => {
+      try {
+        const { apkPath, outputDir, androidJarsPath } = JSON.parse(body || "{}");
+        const expandHome = p => p ? p.replace(/^~(?=\/|$)/, os.homedir()) : p;
+        const resolvedApk = apkPath ? path.resolve(expandHome(apkPath)) : null;
+        const resolvedOut = outputDir
+          ? path.resolve(expandHome(outputDir))
+          : path.join(os.homedir(), "sootOutput");
+        const resolvedJars = androidJarsPath
+          ? path.resolve(expandHome(androidJarsPath))
+          : path.join(os.homedir(), "Android", "Sdk", "platforms");
+
+        if (!resolvedApk || !fs.existsSync(resolvedApk)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ error: "APK not found: " + resolvedApk }));
+        }
+
+        fs.mkdirSync(resolvedOut, { recursive: true });
+
+        const sootJarDir = path.join(__dirname, "soot_jar");
+        const sootJar    = path.join(sootJarDir, "soot-4.4.0-20220321.130129-1-jar-with-dependencies.jar");
+        if (!fs.existsSync(sootJar)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ error: "Soot jar not found: " + sootJar }));
+        }
+        const helperJars = fs.readdirSync(sootJarDir)
+          .filter(f => f.endsWith(".jar") && !f.startsWith("soot-4.4.0"))
+          .map(f => path.join(sootJarDir, f));
+        const classpath = [sootJar, ...helperJars].join(":");
+
+        const javaArgs = [
+          "-cp", classpath,
+          "soot.Main",
+          "-src-prec", "apk",
+          "-process-dir", resolvedApk,
+          "-d", resolvedOut,
+          "-output-format", "J",
+          "-allow-phantom-refs",
+          "-whole-program",
+          "-p", "cg", "enabled:false",
+        ];
+        if (fs.existsSync(resolvedJars)) {
+          javaArgs.splice(javaArgs.indexOf("-d"), 0, "-android-jars", resolvedJars);
+        }
+
+        res.writeHead(200, {
+          "Content-Type":  "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection":    "keep-alive",
+        });
+        const sse = (type, data) => res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+        sse("log", { message: "Starting Soot…" });
+        sse("log", { message: "APK: " + resolvedApk });
+        sse("log", { message: "Output: " + resolvedOut });
+
+        const child = spawn("java", javaArgs, { cwd: __dirname });
+        child.stdout.on("data", d => d.toString().split("\n").filter(l => l.trim()).forEach(l => sse("log", { message: l })));
+        child.stderr.on("data", d => d.toString().split("\n").filter(l => l.trim()).forEach(l => sse("log", { message: l })));
+        child.on("close", code => {
+          if (code === 0) {
+            sse("log", { message: "" });
+            sse("log", { message: "Done. Output: " + resolvedOut });
+          } else {
+            sse("error", { message: "Soot exited with code " + code });
+          }
+          sse("done", {});
+          res.end();
+        });
+        req.on("close", () => { try { child.kill(); } catch {} });
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // POST /api/soot/list-jimple — list .jimple files in a folder
+  if (req.method === "POST" && pathname === "/api/soot/list-jimple") {
+    let body = "";
+    req.on("data", d => (body += d));
+    req.on("end", () => {
+      try {
+        const { folderPath } = JSON.parse(body || "{}");
+        const resolved = path.resolve(folderPath.replace(/^~(?=\/|$)/, os.homedir()));
+        if (!fs.existsSync(resolved)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ error: "Folder not found: " + resolved }));
+        }
+        const files = [];
+        const walk = (dir) => {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else if (entry.name.endsWith(".jimple")) {
+              // name = relative path from root folder so user can tell packages apart
+              files.push({ name: path.relative(resolved, full), path: full });
+            }
+          }
+        };
+        walk(resolved);
+        files.sort((a, b) => a.name.localeCompare(b.name));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ files }));
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // POST /api/soot/read-jimple — read a single .jimple file
+  if (req.method === "POST" && pathname === "/api/soot/read-jimple") {
+    let body = "";
+    req.on("data", d => (body += d));
+    req.on("end", () => {
+      try {
+        const { folderPath, className } = JSON.parse(body || "{}");
+        const resolved = path.resolve(folderPath.replace(/^~(?=\/|$)/, os.homedir()));
+        // className may be a relative path like com/example/Foo.jimple
+        const filePath = path.join(resolved, className.endsWith(".jimple") ? className : className + ".jimple");
+        if (!filePath.startsWith(resolved)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ error: "Invalid path" }));
+        }
+        if (!fs.existsSync(filePath)) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ error: "File not found: " + filePath }));
+        }
+        const content = fs.readFileSync(filePath, "utf8");
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ content }));
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
     return;
   }
 

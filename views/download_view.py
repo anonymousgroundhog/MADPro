@@ -72,9 +72,9 @@ class DownloadView(ctk.CTkFrame):
             # Collect all packages across categories then hand to Appium
             from core.appium_downloader import (
                 is_appium_available, is_uia2_driver_installed,
-                start_appium_server, download_via_appium,
+                is_appium_server_running, start_appium_server, download_via_appium,
             )
-            if not is_appium_available() or not is_uia2_driver_installed():
+            if not is_appium_server_running() and (not is_appium_available() or not is_uia2_driver_installed()):
                 self._log.append(
                     "Appium is not set up. Select Google Play source and "
                     "click Setup Appium first."

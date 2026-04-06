@@ -83,7 +83,7 @@ function metaFromPath(apkPath, label) {
 
 // ── Recursive APK discovery ─────────────────────────────────────────────────
 
-function walkDir(dir) {
+function walkDir(dir, maxDepth = 5, currentDepth = 0) {
   let results = [];
   let entries;
   try {
@@ -91,10 +91,14 @@ function walkDir(dir) {
   } catch {
     return results;
   }
+
+  // Limit recursion depth to prevent scanning extremely deep directory trees
+  if (currentDepth >= maxDepth) return results;
+
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      results = results.concat(walkDir(full));
+      results = results.concat(walkDir(full, maxDepth, currentDepth + 1));
     } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".apk")) {
       results.push(full);
     }
@@ -107,9 +111,18 @@ function walkDir(dir) {
  * Every directory that directly contains at least one APK is treated as
  * one logical app — regardless of how many levels deep it sits.
  * APKs sitting directly in baseDir (depth 0) each become their own app.
+ *
+ * Limits scanning to prevent hangs with massive collections (e.g., 3000+ directories).
  */
 function groupApks(baseDir) {
-  const allApks = walkDir(baseDir);
+  // Quick sanity check: if base directory has too many immediate children, warn and limit depth
+  let immediateChildren = 0;
+  try {
+    immediateChildren = fs.readdirSync(baseDir).length;
+  } catch {}
+
+  const maxDepth = immediateChildren > 1000 ? 2 : 5;
+  const allApks = walkDir(baseDir, maxDepth);
   const byDir = new Map();
 
   for (const apkPath of allApks) {
@@ -159,9 +172,19 @@ function groupApks(baseDir) {
 /**
  * Scans baseDir recursively and returns an array of app metadata objects.
  * Each object: { package, appName, label, apkFiles, primaryApk, versionName, versionCode, aaptAvailable }
+ *
+ * Limits results to 5000 apps to prevent UI hangs with massive directories.
  */
 function scanApks(baseDir) {
   const groups = groupApks(baseDir);
+  const MAX_APPS = 5000;
+
+  // If there are too many apps, truncate and warn
+  if (groups.length > MAX_APPS) {
+    console.warn(`⚠ Directory contains ${groups.length} apps. Limiting to ${MAX_APPS} for performance.`);
+    groups.length = MAX_APPS;
+  }
+
   return groups.map(({ dir, apks, primary, label }) => {
     const aapt = parseAaptDump(primary);
     const fallback = metaFromPath(primary, label);

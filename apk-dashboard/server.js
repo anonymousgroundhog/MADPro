@@ -11,6 +11,7 @@ const { spawn } = require("child_process");
 const { scanApks } = require("./scanner");
 const { lookupPlayStore, clearCache } = require("./playstore");
 const { inspectApk } = require("./apk_inspector");
+const { getManifestSummary, DANGEROUS_PERMISSIONS } = require("./manifest_extractor");
 const puppeteer = require("puppeteer");
 const toolsApi = require("./tools-api");
 
@@ -71,6 +72,16 @@ async function runScan(dir) {
   state.error = null;
   state.apps = [];
   state.progress = { done: 0, total: 0 };
+
+  // Check if directory has a very large number of entries
+  let immediateEntries = 0;
+  try {
+    immediateEntries = fs.readdirSync(dir).length;
+  } catch {}
+
+  if (immediateEntries > 1000) {
+    state.warning = `⚠ Large directory detected (${immediateEntries} entries). Limiting recursion depth for performance.`;
+  }
 
   let scanned;
   try {
@@ -535,6 +546,131 @@ function renderHtml() {
   /* loading dots */
   .loading-dots::after { content: '.'; animation: ldots 1.2s steps(3,end) infinite; }
   @keyframes ldots { 0%{content:'.'} 33%{content:'..'} 66%{content:'...'} }
+
+  /* ── Progress modal ── */
+  .progress-modal {
+    position: fixed; inset: 0; z-index: 200;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .progress-overlay {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,.7); cursor: pointer;
+  }
+  .progress-window {
+    position: relative; z-index: 201;
+    background: var(--surface); border: 1px solid var(--card-border);
+    border-radius: var(--radius); width: min(500px, 92vw);
+    box-shadow: 0 12px 60px rgba(0,0,0,.8);
+    display: flex; flex-direction: column;
+    max-height: 80vh; overflow-y: auto;
+  }
+  .progress-header {
+    padding: 16px 18px; border-bottom: 1px solid var(--card-border);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: rgba(255,255,255,.02);
+  }
+  #progressTitle {
+    font-weight: 700; font-size: .95rem; color: var(--text);
+  }
+  .progress-close {
+    background: none; border: none; color: var(--text-muted);
+    font-size: 1.2rem; cursor: pointer; line-height: 1; padding: 0 4px;
+  }
+  .progress-close:hover { color: var(--text); }
+  .progress-body {
+    padding: 16px 18px;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .progress-status {
+    font-size: .88rem; color: var(--text-muted); margin-bottom: 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .progress-status::before {
+    content: ''; display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; background: #4a9eff; animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; } 50% { opacity: 0.4; }
+  }
+  .progress-bar-container {
+    position: relative; margin-bottom: 10px;
+  }
+  .progress-bar-bg {
+    background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 8px; height: 28px; overflow: hidden;
+    position: relative;
+  }
+  .progress-bar-fill {
+    height: 100%; background: linear-gradient(90deg, #4a9eff, #5ac8ff);
+    border-radius: 7px; transition: width .3s ease;
+    display: flex; align-items: center; justify-content: flex-end;
+    padding-right: 8px; font-weight: 700; font-size: .75rem;
+    color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.5);
+  }
+  .progress-percent {
+    position: absolute; top: 50%; right: 8px; transform: translateY(-50%);
+    font-weight: 700; font-size: .8rem; color: var(--text-muted);
+    z-index: 1; text-shadow: 0 1px 2px rgba(0,0,0,.3);
+  }
+  .progress-detail {
+    font-size: .82rem; color: var(--text-muted); line-height: 1.5;
+  }
+  .progress-detail div {
+    display: flex; justify-content: space-between; gap: 8px;
+  }
+  .progress-detail strong { color: var(--text); font-size: .8rem; }
+  .progress-log {
+    background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 6px; padding: 10px; overflow-y: auto;
+    font-size: .8rem; font-family: monospace; color: #8ab4d4;
+    line-height: 1.6; flex: 1;
+  }
+  .progress-log-entry {
+    margin-bottom: 4px; color: #a0a8b8;
+  }
+  .progress-log-entry.info { color: #8ab4d4; }
+  .progress-log-entry.warn { color: #d4a574; }
+  .progress-log-entry.ok { color: #5ec583; }
+
+  /* ── Manifest Viewer ── */
+  .manifest-container { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media(max-width:1000px){ .manifest-container{ grid-template-columns: 1fr; } }
+  .manifest-section { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--radius); overflow: hidden; }
+  .manifest-section-header { padding: 11px 16px; font-weight: 700; font-size: .9rem; background: rgba(255,255,255,.03); border-bottom: 1px solid var(--card-border); }
+  .manifest-section-body { padding: 14px 16px; }
+  .manifest-info-row { display: flex; justify-content: space-between; margin-bottom: 10px; }
+  .manifest-info-label { font-size: .75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+  .manifest-info-value { font-family: monospace; font-size: .85rem; color: var(--text); }
+  .manifest-xml-viewer { background: #0a0c14; border: 1px solid var(--card-border); border-radius: 6px; padding: 10px; height: 350px; overflow-y: auto; font-family: monospace; font-size: .75rem; line-height: 1.5; color: #8ab4d4; }
+  .manifest-xml-viewer code { color: #a0a8b8; }
+  .manifest-xml-viewer .tag { color: #ff7b72; }
+  .manifest-xml-viewer .attr { color: #7eb6ff; }
+  .manifest-xml-viewer .val { color: #a371f7; }
+
+  .permissions-list { display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; }
+  .permission-item {
+    padding: 8px 12px; border-radius: 6px; font-size: .8rem; font-family: monospace;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .permission-item.dangerous {
+    background: rgba(224, 74, 74, 0.15); border: 1px solid var(--accent-ads);
+    color: #fca5a5;
+  }
+  .permission-item.normal {
+    background: var(--card-bg); border: 1px solid var(--card-border);
+    color: var(--text-muted);
+  }
+  .permission-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .permission-dot.dangerous { background: var(--accent-ads); }
+  .permission-dot.normal { background: var(--text-muted); }
+  .manifest-apk-browser { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 10px; }
+  .manifest-apk-item { padding: 8px 10px; cursor: pointer; border-radius: 4px; font-size: .85rem; transition: background .12s; }
+  .manifest-apk-item:hover { background: #2a2f4a; }
+  .manifest-apk-item.selected { background: var(--accent-no-ads); color: #fff; }
+  .manifest-status { padding: 10px 14px; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 6px; font-size: .8rem; color: var(--text-muted); text-align: center; }
 </style>
 </head>
 <body>
@@ -562,6 +698,7 @@ function renderHtml() {
 <div class="tab-nav">
   <button class="tab-btn active" id="tabBtnKanban" onclick="switchTab('kanban')">📋 Kanban Board</button>
   <button class="tab-btn" id="tabBtnTools" onclick="switchTab('tools')">🔧 Tools</button>
+  <button class="tab-btn" id="tabBtnManifest" onclick="switchTab('manifest')">📄 Manifest Viewer</button>
   <button class="tab-btn" id="tabBtnLogs" onclick="switchTab('logs')">🔍 Log Viewer</button>
   <button class="tab-btn" id="tabBtnFsm" onclick="switchTab('fsm')">🔬 FSM Analyzer</button>
   <button class="tab-btn" id="tabBtnJimple" onclick="switchTab('jimple')">🧩 Jimple</button>
@@ -585,6 +722,37 @@ function renderHtml() {
       <span class="col-count" id="countNoAds">0</span>
     </div>
     <div class="cards" id="colNoAds"><div class="empty">No apps yet.</div></div>
+  </div>
+</div>
+
+<!-- ── Progress modal ── -->
+<div id="progressModal" class="progress-modal" style="display: none;">
+  <div class="progress-overlay" onclick="if(event.target === this) closeProgress()"></div>
+  <div class="progress-window">
+    <div class="progress-header">
+      <span id="progressTitle">Processing…</span>
+      <button class="progress-close" onclick="closeProgress()">✕</button>
+    </div>
+    <div class="progress-body">
+      <div id="progressStatus" class="progress-status">Initializing…</div>
+      <div class="progress-bar-container">
+        <div class="progress-bar-bg">
+          <div id="progressBar" class="progress-bar-fill" style="width: 0%"></div>
+        </div>
+        <div id="progressPercent" class="progress-percent">0%</div>
+      </div>
+      <div id="progressDetail" class="progress-detail">
+        <div><strong>Scanning:</strong> <span id="scanCount">0</span> APK(s)</div>
+        <div><strong>Enriching:</strong> <span id="enrichCount">0</span> / <span id="enrichTotal">0</span></div>
+        <div style="margin-top: 8px; font-size: 0.85rem; color: #888;">
+          <div id="progressWarning" style="display: none; color: #d4a574; margin-top: 4px;"></div>
+        </div>
+      </div>
+      <div style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,.1); padding-top: 8px; flex: 1; min-height: 140px; display: flex; flex-direction: column;">
+        <div style="font-size: 0.72rem; font-weight: 700; color: var(--text-muted); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.05em;">Activity Log</div>
+        <div id="progressLog" class="progress-log" style="flex: 1; min-height: 120px;"></div>
+      </div>
+    </div>
   </div>
 </div>
 </div>
@@ -706,6 +874,73 @@ function renderHtml() {
   </div>
 
 </div><!-- /tabTools -->
+
+<!-- ── Manifest Viewer tab content ── -->
+<div id="tabManifest" style="display:none; padding:20px 24px;">
+  <div class="manifest-container">
+    <!-- Left: APK Browser -->
+    <div class="manifest-section">
+      <div class="manifest-section-header">📁 Select APK</div>
+      <div class="manifest-section-body">
+        <div style="display:flex;gap:6px;margin-bottom:10px;">
+          <input type="text" id="manifestDirInput" class="tools-input" style="flex:1;" placeholder="Choose directory…" />
+          <button class="tools-btn-sm" onclick="browseForManifest()">Browse…</button>
+        </div>
+        <div id="manifestApkList" class="manifest-apk-browser" style="max-height:350px;overflow-y:auto;">
+          <div class="manifest-status">Select a directory to browse APKs</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Permissions -->
+    <div class="manifest-section">
+      <div class="manifest-section-header" id="manifestPermHeader">🔒 Permissions (0)</div>
+      <div class="manifest-section-body">
+        <div id="manifestPermissions" class="permissions-list">
+          <div class="manifest-status">Select an APK to view permissions</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Package Info & Manifest XML -->
+  <div style="margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+    <!-- Package Info -->
+    <div class="manifest-section">
+      <div class="manifest-section-header">📦 Package Information</div>
+      <div class="manifest-section-body">
+        <div class="manifest-info-row">
+          <span class="manifest-info-label">Package:</span>
+          <span class="manifest-info-value" id="manifestPkgName">—</span>
+        </div>
+        <div class="manifest-info-row">
+          <span class="manifest-info-label">Version Name:</span>
+          <span class="manifest-info-value" id="manifestVersionName">—</span>
+        </div>
+        <div class="manifest-info-row">
+          <span class="manifest-info-label">Version Code:</span>
+          <span class="manifest-info-value" id="manifestVersionCode">—</span>
+        </div>
+        <div class="manifest-info-row">
+          <span class="manifest-info-label">Min SDK:</span>
+          <span class="manifest-info-value" id="manifestMinSdk">—</span>
+        </div>
+        <div class="manifest-info-row">
+          <span class="manifest-info-label">Target SDK:</span>
+          <span class="manifest-info-value" id="manifestTargetSdk">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Manifest XML -->
+    <div class="manifest-section">
+      <div class="manifest-section-header">📄 AndroidManifest.xml</div>
+      <div class="manifest-section-body" style="height:100%;overflow:hidden;display:flex;flex-direction:column;padding:0;">
+        <div id="manifestXmlViewer" class="manifest-xml-viewer"></div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ── Log Viewer tab content ── -->
 <div id="tabLogs" style="display:none; padding:20px 24px;">
@@ -1478,6 +1713,8 @@ return r1;</pre>
 let allApps = [];
 let pollTimer = null;
 let currentBrowsePath = '';
+let progressLogEntries = [];
+let lastProgressState = {};
 
 // ── API ─────────────────────────────────────────────────────────────────────
 
@@ -1499,17 +1736,33 @@ async function startScan() {
     return;
   }
   document.getElementById('btnScan').disabled = true;
+
+  // Reset log and show progress modal immediately
+  progressLogEntries = [];
+  lastProgressState = {};
+  const modal = document.getElementById('progressModal');
+  if (modal) {
+    modal.style.display = 'flex';
+  }
+
+  // Add initial log entry
+  addProgressLog('Scan started', 'info');
+
   try {
+    addProgressLog('Sending request to server…', 'info');
     await api('/api/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dir }),
     });
+    addProgressLog('Server accepted request, polling status…', 'info');
     pollStatus();
   } catch (err) {
+    addProgressLog('Error: ' + err.message, 'warn');
     document.getElementById('statusText').textContent = 'Error: ' + err.message;
     document.getElementById('statusBar').className = 'status-bar error';
     document.getElementById('btnScan').disabled = false;
+    closeProgress();
   }
 }
 
@@ -1521,14 +1774,19 @@ function pollStatus() {
 }
 
 async function fetchStatus() {
-  const s = await api('/api/status');
-  allApps = s.apps || [];
-  renderBoard();
-  updateStatusBar(s);
-  if (s.scanning || s.enriching) {
-    pollStatus();
-  } else {
-    document.getElementById('btnScan').disabled = false;
+  try {
+    const s = await api('/api/status');
+    allApps = s.apps || [];
+    renderBoard();
+    updateStatusBar(s);
+    updateProgress(s);
+    if (s.scanning || s.enriching) {
+      pollStatus();
+    } else {
+      document.getElementById('btnScan').disabled = false;
+    }
+  } catch (err) {
+    addProgressLog('Status fetch error: ' + err.message, 'warn');
   }
 }
 
@@ -1543,7 +1801,7 @@ function updateStatusBar(s) {
   }
   if (s.scanning) {
     bar.classList.add('scanning');
-    txt.textContent = 'Scanning APK files…';
+    txt.textContent = (s.warning || 'Scanning APK files…');
     return;
   }
   if (s.enriching) {
@@ -1553,8 +1811,123 @@ function updateStatusBar(s) {
   }
   bar.classList.add('done');
   txt.textContent = s.dir
-    ? 'Scan complete — ' + allApps.length + ' app(s) found in ' + s.dir
+    ? 'Scan complete — ' + allApps.length + ' app(s) found in ' + s.dir + (s.warning ? ' (' + s.warning + ')' : '')
     : 'Select a directory and click Scan.';
+}
+
+function addProgressLog(message, type = 'info') {
+  const entry = { message, type, time: new Date().toLocaleTimeString() };
+  progressLogEntries.push(entry);
+  // Keep only last 20 entries
+  if (progressLogEntries.length > 20) progressLogEntries.shift();
+  updateProgressLogDisplay();
+}
+
+function updateProgressLogDisplay() {
+  const logEl = document.getElementById('progressLog');
+  if (!logEl) return;
+  logEl.innerHTML = progressLogEntries
+    .map(e => '<div class="progress-log-entry ' + e.type + '">[' + e.time + '] ' + e.message + '</div>')
+    .join('');
+  // Auto-scroll to bottom
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function updateProgress(s) {
+  const modal = document.getElementById('progressModal');
+  if (!modal) return;
+
+  const isProcessing = s.scanning || s.enriching;
+
+  // Track state changes and log them
+  if (s.scanning && !lastProgressState.scanning) {
+    addProgressLog('Scanning directory…', 'info');
+  }
+  if (!s.scanning && lastProgressState.scanning && s.apps?.length) {
+    addProgressLog('Scan complete: ' + s.apps.length + ' APK(s) found', 'ok');
+  }
+  if (s.enriching && !lastProgressState.enriching) {
+    addProgressLog('Enriching data…', 'info');
+  }
+  if (!s.enriching && lastProgressState.enriching) {
+    addProgressLog('Enrichment complete', 'ok');
+  }
+  if (s.warning && !lastProgressState.warning) {
+    addProgressLog(s.warning, 'warn');
+  }
+
+  lastProgressState = { scanning: s.scanning, enriching: s.enriching, warning: s.warning };
+
+  // Always ensure modal is visible while we have data (even if processing is done)
+  if (modal.style.display === 'none' && (s.apps?.length || isProcessing)) {
+    modal.style.display = 'flex';
+  }
+
+  // Update title
+  let title = 'Processing…';
+  if (s.scanning) {
+    title = '📦 Scanning APK Files';
+  } else if (s.enriching) {
+    title = '🔍 Enriching App Data';
+  } else if (s.apps?.length) {
+    title = '✅ Scan Complete';
+  }
+  document.getElementById('progressTitle').textContent = title;
+
+  // Update status message
+  let statusMsg = 'Initializing…';
+  if (s.scanning) {
+    statusMsg = 'Scanning for APK files in directory…';
+  } else if (s.enriching) {
+    statusMsg = 'Fetching Play Store information…';
+  } else if (s.apps?.length) {
+    statusMsg = 'Scan finished successfully!';
+  }
+  document.getElementById('progressStatus').textContent = statusMsg;
+
+  // Update counts
+  const total = s.progress?.total || 0;
+  const done = s.progress?.done || 0;
+  document.getElementById('scanCount').textContent = s.apps?.length || 0;
+  document.getElementById('enrichCount').textContent = done;
+  document.getElementById('enrichTotal').textContent = total;
+
+  // Update progress bar
+  let percent = 0;
+  if (total > 0) {
+    percent = Math.round((done / total) * 100);
+  } else if (!isProcessing && s.apps?.length) {
+    // If not processing and we have apps, show 100%
+    percent = 100;
+  }
+  const bar = document.getElementById('progressBar');
+  const percentEl = document.getElementById('progressPercent');
+  bar.style.width = percent + '%';
+  percentEl.textContent = percent + '%';
+
+  // Auto-close modal after scan completes (after 3 seconds so user can read it)
+  if (!isProcessing && s.apps?.length && percent === 100) {
+    setTimeout(() => {
+      const modal = document.getElementById('progressModal');
+      if (modal) modal.style.display = 'none';
+    }, 3000);
+  }
+
+  // Show warning if present
+  const warningEl = document.getElementById('progressWarning');
+  if (s.warning) {
+    warningEl.textContent = s.warning;
+    warningEl.style.display = 'block';
+  } else {
+    warningEl.style.display = 'none';
+  }
+}
+
+function closeProgress() {
+  document.getElementById('progressModal').style.display = 'none';
+  // Reset log for next scan
+  progressLogEntries = [];
+  lastProgressState = {};
 }
 
 // ── Directory browser ────────────────────────────────────────────────────────
@@ -1884,6 +2257,7 @@ async function doExport() {
 function switchTab(name) {
   document.getElementById('tabKanban').style.display   = name === 'kanban'   ? '' : 'none';
   document.getElementById('tabTools').style.display    = name === 'tools'    ? '' : 'none';
+  document.getElementById('tabManifest').style.display = name === 'manifest' ? '' : 'none';
   document.getElementById('tabLogs').style.display     = name === 'logs'     ? '' : 'none';
   document.getElementById('tabFsm').style.display      = name === 'fsm'      ? '' : 'none';
   document.getElementById('tabJimple').style.display   = name === 'jimple'   ? '' : 'none';
@@ -1892,12 +2266,14 @@ function switchTab(name) {
   chatEl.style.display = name === 'chat' ? 'flex' : 'none';
   document.getElementById('tabBtnKanban').classList.toggle('active', name === 'kanban');
   document.getElementById('tabBtnTools').classList.toggle('active', name === 'tools');
+  document.getElementById('tabBtnManifest').classList.toggle('active', name === 'manifest');
   document.getElementById('tabBtnLogs').classList.toggle('active', name === 'logs');
   document.getElementById('tabBtnFsm').classList.toggle('active', name === 'fsm');
   document.getElementById('tabBtnJimple').classList.toggle('active', name === 'jimple');
   document.getElementById('tabBtnChat').classList.toggle('active', name === 'chat');
   document.getElementById('tabBtnSettings').classList.toggle('active', name === 'settings');
   if (name === 'tools')    initToolsTab();
+  if (name === 'manifest') initManifestTab();
   if (name === 'logs')     initLogsTab();
   if (name === 'fsm')      fsmInitTab();
   if (name === 'settings') settingsInit();
@@ -2138,6 +2514,149 @@ async function cancelCurrentJob(type) {
   if (!jobId) return;
   await api('/api/tools/cancel', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ jobId }) });
   appendToolsLog('[INFO] Cancellation requested for ' + type + ' job');
+}
+
+// ── Manifest Viewer ───────────────────────────────────────────────────────────
+
+let _manifestCurrentApk = null;
+let _manifestApkList = [];
+
+function initManifestTab() {
+  // Initialize on tab load - nothing to do yet
+}
+
+function browseForManifest() {
+  toolsBrowseTarget = 'manifestDirInput';
+  const current = document.getElementById('manifestDirInput')?.value.trim() || '';
+  loadToolsBrowserDir(current || null);
+  document.getElementById('toolsBrowserModal').classList.add('open');
+}
+
+async function loadManifestApks(dirPath) {
+  try {
+    const data = await api('/api/browse-apks?dir=' + encodeURIComponent(dirPath));
+    const listEl = document.getElementById('manifestApkList');
+
+    if (!data.apks || data.apks.length === 0) {
+      listEl.innerHTML = '<div class="manifest-status">No APK files found in this directory</div>';
+      _manifestApkList = [];
+      return;
+    }
+
+    _manifestApkList = data.apks;
+    let html = '';
+    for (let i = 0; i < data.apks.length; i++) {
+      const apk = data.apks[i];
+      const escaped = escapeHtml(apk.path).replace(/"/g, '&quot;');
+      html += '<div class="manifest-apk-item" data-path="' + escaped + '" onclick="selectManifestApkByIndex(' + i + ')">' + escapeHtml(apk.name) + '</div>';
+    }
+    listEl.innerHTML = html;
+  } catch (e) {
+    document.getElementById('manifestApkList').innerHTML = '<div class="manifest-status" style="color:#f87171;">Error loading APKs: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function selectManifestApkByIndex(index) {
+  const apk = _manifestApkList[index];
+  if (apk) {
+    selectManifestApk(apk.path, index);
+  }
+}
+
+async function selectManifestApk(apkPath, itemIndex) {
+  _manifestCurrentApk = apkPath;
+
+  // Update selected style
+  const items = document.querySelectorAll('.manifest-apk-item');
+  for (let i = 0; i < items.length; i++) {
+    items[i].classList.toggle('selected', i === itemIndex);
+  }
+
+  // Load manifest
+  try {
+    const url = '/api/manifest?file=' + encodeURIComponent(apkPath);
+    const response = await fetch(url);
+    if (!response.ok) {
+      showManifestError('HTTP ' + response.status);
+      return;
+    }
+    const data = await response.json();
+
+    if (data.error) {
+      showManifestError(data.error);
+      return;
+    }
+
+    // Update package info
+    document.getElementById('manifestPkgName').textContent = data.packageInfo.package || '—';
+    document.getElementById('manifestVersionName').textContent = data.packageInfo.versionName || '—';
+    document.getElementById('manifestVersionCode').textContent = data.packageInfo.versionCode || '—';
+    document.getElementById('manifestMinSdk').textContent = data.packageInfo.minSdkVersion || '—';
+    document.getElementById('manifestTargetSdk').textContent = data.packageInfo.targetSdkVersion || '—';
+
+    // Update manifest XML
+    const xmlEl = document.getElementById('manifestXmlViewer');
+    if (data.manifestXml) {
+      let xml = data.manifestXml.substring(0, 5000);
+      if (data.manifestXml.length > 5000) xml += ' [truncated...]';
+      xmlEl.textContent = xml;
+    } else {
+      xmlEl.textContent = 'No manifest available';
+    }
+
+    // Update permissions
+    displayManifestPermissions(data.permissions || [], data.dangerousPermissions || []);
+  } catch (e) {
+    console.error('Manifest error:', e);
+    showManifestError('Error: ' + (e.message || 'Unknown error'));
+  }
+}
+
+function displayManifestPermissions(allPerms, dangerousPerms) {
+  const permEl = document.getElementById('manifestPermissions');
+  const headerEl = document.getElementById('manifestPermHeader');
+
+  if (!allPerms || allPerms.length === 0) {
+    permEl.innerHTML = '<div class="manifest-status">No permissions found</div>';
+    headerEl.textContent = '🔒 Permissions (0)';
+    return;
+  }
+
+  headerEl.textContent = '🔒 Permissions (' + allPerms.length + ', ' + dangerousPerms.length + ' dangerous)';
+
+  let html = '';
+  const dangerousSet = new Set(dangerousPerms);
+
+  // Dangerous permissions first
+  const dangerous = allPerms.filter(p => dangerousSet.has(p));
+  if (dangerous.length > 0) {
+    html += '<div style="margin-bottom:8px;font-size:.75rem;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:.05em;">Dangerous</div>';
+    for (const perm of dangerous) {
+      html += '<div class="permission-item dangerous"><span class="permission-dot dangerous"></span>' + escapeHtml(perm) + '</div>';
+    }
+  }
+
+  // Normal permissions
+  const normal = allPerms.filter(p => !dangerousSet.has(p));
+  if (normal.length > 0) {
+    if (dangerous.length > 0) html += '<div style="margin:8px 0;border-top:1px solid var(--card-border);padding-top:8px;"></div>';
+    html += '<div style="margin-bottom:8px;font-size:.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">Normal</div>';
+    for (const perm of normal) {
+      html += '<div class="permission-item normal"><span class="permission-dot normal"></span>' + escapeHtml(perm) + '</div>';
+    }
+  }
+
+  permEl.innerHTML = html;
+}
+
+function showManifestError(msg) {
+  document.getElementById('manifestPkgName').textContent = '—';
+  document.getElementById('manifestVersionName').textContent = '—';
+  document.getElementById('manifestVersionCode').textContent = '—';
+  document.getElementById('manifestMinSdk').textContent = '—';
+  document.getElementById('manifestTargetSdk').textContent = '—';
+  document.getElementById('manifestXmlViewer').textContent = 'Error: ' + msg;
+  document.getElementById('manifestPermissions').innerHTML = '<div class="manifest-status" style="color:#f87171;">' + escapeHtml(msg) + '</div>';
 }
 
 // ── Log Viewer ────────────────────────────────────────────────────────────────
@@ -2426,6 +2945,10 @@ function renderToolsBrowserList(data, listId, pathId, navigateFn) {
 function selectToolsDir() {
   if (toolsBrowseTarget && currentToolsBrowsePath) {
     document.getElementById(toolsBrowseTarget).value = currentToolsBrowsePath;
+    // If this is for the manifest viewer, load APKs
+    if (toolsBrowseTarget === 'manifestDirInput') {
+      loadManifestApks(currentToolsBrowsePath);
+    }
   }
   document.getElementById('toolsBrowserModal').classList.remove('open');
 }
@@ -5157,6 +5680,7 @@ const server = http.createServer(async (req, res) => {
       progress: state.progress,
       apps: state.apps,
       error: state.error,
+      warning: state.warning,
     });
   }
 
@@ -5355,6 +5879,22 @@ const server = http.createServer(async (req, res) => {
       } catch (e2) {
         return jsonResponse(res, { error: e2.message }, 500);
       }
+    }
+  }
+
+  // GET /api/manifest?file=/path/to/app.apk
+  if (req.method === "GET" && pathname === "/api/manifest") {
+    const fileParam = reqUrl.searchParams.get("file") || "";
+    if (!fileParam) return jsonResponse(res, { error: "Missing file parameter" }, 400);
+
+    const abs = path.resolve(fileParam.replace(/^~/, os.homedir()));
+    if (!fs.existsSync(abs)) return jsonResponse(res, { error: "File not found: " + abs }, 404);
+
+    try {
+      const summary = getManifestSummary(abs);
+      return jsonResponse(res, summary);
+    } catch (err) {
+      return jsonResponse(res, { error: err.message }, 500);
     }
   }
 
@@ -6147,7 +6687,7 @@ Return ONLY the Solidity source code. No markdown, no code fences, no explanatio
 
         fs.mkdirSync(resolvedOut, { recursive: true });
 
-        const sootJarDir = path.join(__dirname, "soot_jar");
+        const sootJarDir = path.join(__dirname, "..", "jar_libs");
         const sootJar    = path.join(sootJarDir, "soot-4.4.0-20220321.130129-1-jar-with-dependencies.jar");
         if (!fs.existsSync(sootJar)) {
           res.writeHead(400, { "Content-Type": "application/json" });

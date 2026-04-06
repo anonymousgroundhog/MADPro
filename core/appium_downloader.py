@@ -101,6 +101,11 @@ def is_uia2_driver_installed() -> bool:
     When the Appium Desktop GUI app is running we trust it has the driver
     bundled (it ships with uiautomator2 by default in v1.x).
     """
+    # Appium Desktop 1.x ships uiautomator2 bundled — if server is running
+    # we can assume the driver is available
+    if is_appium_server_running():
+        return True
+
     cli = _find_appium_cli()
     if cli:
         try:
@@ -109,11 +114,6 @@ def is_uia2_driver_installed() -> bool:
             return "uiautomator2" in r.stdout.lower()
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
-
-    # Appium Desktop 1.x ships uiautomator2 bundled — if server is running
-    # we can assume the driver is available
-    if is_appium_server_running():
-        return True
 
     # Check Appium Desktop AppImage mount for embedded uia2 driver
     import glob

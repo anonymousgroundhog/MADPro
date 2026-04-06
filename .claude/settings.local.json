@@ -92,7 +92,13 @@
       "Bash(curl -s http://localhost:3462/)",
       "Bash(pkill -f \"node server.js --port 3462\")",
       "Bash(curl -s http://localhost:3463/)",
-      "Bash(pkill -f \"node server.js --port 3463\")"
+      "Bash(pkill -f \"node server.js --port 3463\")",
+      "Bash(curl -s http://localhost:3456/)",
+      "Bash(pkill -9 node)",
+      "Bash(xargs kill:*)",
+      "Bash(curl -s 'http://localhost:3456/api/manifest?file=/nonexistent.apk')",
+      "Bash(curl -s 'http://localhost:3456/api/manifest?file=/bin/cat')",
+      "Bash(curl -s 'http://localhost:3456/')"
     ]
   }
 }

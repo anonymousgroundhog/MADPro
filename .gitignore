@@ -13,7 +13,6 @@ build/
 
 # ── Large binary assets ────────────────────────────────────────────────────────
 # Copy these from MADScanner_AI with `make copy-assets`
-jar_libs/
 android/
 
 # ── Output / working directories ──────────────────────────────────────────────

@@ -823,6 +823,16 @@ function renderHtml() {
         <label class="tools-label">Class patterns <span class="tools-hint">(comma-separated, e.g. MainActivity, *Login*)</span></label>
         <input type="text" id="injectPatterns" class="tools-input" style="width:100%;margin-bottom:10px;" placeholder="MainActivity, *Activity, com.example.*" />
 
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+          <input type="checkbox" id="injectAll" style="cursor:pointer;" onchange="toggleInjectAllMode()" />
+          <label for="injectAll" style="margin:0;cursor:pointer;">Inject all classes (including framework libraries)</label>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+          <input type="checkbox" id="forceRecompile" style="cursor:pointer;" />
+          <label for="forceRecompile" style="margin:0;cursor:pointer;">Force recompile (override existing .class file)</label>
+        </div>
+
         <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;">
           <button class="tools-btn-secondary" onclick="compileInjector()">Compile LogInjector</button>
           <button class="tools-btn-primary" id="btnStartInject" onclick="startInjection()">Inject Selected</button>
@@ -2455,11 +2465,27 @@ async function startDownload() {
 
 // ── Log Injection ──────────────────────────────────────────────────────────────
 
+function toggleInjectAllMode() {
+  const injectAll = document.getElementById('injectAll').checked;
+  const patternsInput = document.getElementById('injectPatterns');
+  patternsInput.disabled = injectAll;
+  if (injectAll) {
+    patternsInput.style.opacity = '0.5';
+  } else {
+    patternsInput.style.opacity = '1';
+  }
+}
+
 async function compileInjector() {
-  appendToolsLog('--- Compiling LogInjector.java ---');
-  const r = await api('/api/tools/compile', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+  const forceRecompile = document.getElementById('forceRecompile').checked;
+  appendToolsLog('--- Compiling LogInjector.java' + (forceRecompile ? ' (force recompile)' : '') + ' ---');
+  const r = await api('/api/tools/compile', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ forceRecompile }) });
   streamJob(r.jobId, err => {
     if (err) appendToolsLog('[ERROR] ' + err);
+    else {
+      document.getElementById('forceRecompile').checked = false;
+      appendToolsLog('[INFO] Force recompile option cleared');
+    }
     refreshToolsStatus();
   });
 }
@@ -2469,14 +2495,15 @@ async function startInjection() {
   const outputDir = document.getElementById('injectOutputDir').value.trim() || document.getElementById('injectOutputDir').placeholder;
   const patternsRaw = document.getElementById('injectPatterns').value.trim();
   const patterns = patternsRaw ? patternsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const injectAll = document.getElementById('injectAll').checked;
 
   if (!apkDir) { appendToolsLog('[WARN] Enter an APK directory first.'); return; }
 
   document.getElementById('btnStartInject').disabled = true;
   document.getElementById('btnCancelInject').disabled = false;
-  appendToolsLog('--- Starting injection: ' + apkDir + ' ---');
+  appendToolsLog('--- Starting injection: ' + apkDir + (injectAll ? ' (ALL CLASSES)' : '') + ' ---');
 
-  const r = await api('/api/tools/inject', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ apkDir, patterns, outputDir }) });
+  const r = await api('/api/tools/inject', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ apkDir, patterns, outputDir, injectAll }) });
   currentJobs.inject = r.jobId;
   streamJob(r.jobId, err => {
     document.getElementById('btnStartInject').disabled = false;
@@ -5990,19 +6017,22 @@ const server = http.createServer(async (req, res) => {
     return jsonResponse(res, { jobId });
   }
 
-  // POST /api/tools/inject  { apkDir, patterns, outputDir }
+  // POST /api/tools/inject  { apkDir, patterns, outputDir, injectAll }
   if (req.method === "POST" && pathname === "/api/tools/inject") {
     const body = await readBody(req);
     let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
     if (!p.apkDir) return jsonResponse(res, { error: "Missing apkDir" }, 400);
     if (!p.outputDir) return jsonResponse(res, { error: "Missing outputDir" }, 400);
-    const jobId = toolsApi.startInjection({ apkDir: p.apkDir, patterns: p.patterns || [], outputDir: p.outputDir });
+    const jobId = toolsApi.startInjection({ apkDir: p.apkDir, patterns: p.patterns || [], outputDir: p.outputDir, injectAll: p.injectAll || false });
     return jsonResponse(res, { jobId });
   }
 
   // POST /api/tools/compile — compile LogInjector.java on host
   if (req.method === "POST" && pathname === "/api/tools/compile") {
-    const jobId = toolsApi.startCompile();
+    const body = await readBody(req);
+    let p = {};
+    try { p = JSON.parse(body); } catch {}
+    const jobId = toolsApi.startCompile({ forceRecompile: p.forceRecompile || false });
     return jsonResponse(res, { jobId });
   }
 

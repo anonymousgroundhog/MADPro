@@ -35,15 +35,21 @@ public class LogInjector {
             return;
         }
 
-        if (args.length < 3 || args.length > 4) {
-            System.err.println("Usage: java LogInjector <android-platforms> <apk-dir-or-file> <output-dir> [class-filter-csv]");
+        final boolean injectAll = args.length > 0 && args[0].equals("--inject-all");
+        int argIdx = injectAll ? 1 : 0;
+
+        String[] remainingArgs = new String[args.length - argIdx];
+        System.arraycopy(args, argIdx, remainingArgs, 0, remainingArgs.length);
+
+        if (remainingArgs.length < 3 || remainingArgs.length > 4) {
+            System.err.println("Usage: java LogInjector [--inject-all] <android-platforms> <apk-dir-or-file> <output-dir> [class-filter-csv]");
             System.exit(1);
         }
 
-        String androidPlatforms = args[0];
-        String apkInput         = args[1];   // may be a dir (split APKs) or a single .apk
-        String outputDir        = args[2];
-        String classFilterCsv   = args.length == 4 ? args[3] : "";
+        String androidPlatforms = remainingArgs[0];
+        String apkInput         = remainingArgs[1];   // may be a dir (split APKs) or a single .apk
+        String outputDir        = remainingArgs[2];
+        String classFilterCsv   = remainingArgs.length == 4 ? remainingArgs[3] : "";
 
         final Set<String> classFilter = new HashSet<>();
         if (!classFilterCsv.isEmpty()) {
@@ -53,11 +59,12 @@ public class LogInjector {
             }
         }
 
-        System.out.println("APK input : " + apkInput);
-        System.out.println("Output    : " + outputDir);
-        System.out.println("Filter    : " + (classFilter.isEmpty() ? "(all classes)" : classFilter));
+        System.out.println("APK input     : " + apkInput);
+        System.out.println("Output        : " + outputDir);
+        System.out.println("Inject all    : " + (injectAll ? "YES (include framework + ignore patterns)" : "NO (app classes only)"));
+        System.out.println("Class filter  : " + (injectAll ? "(disabled by --inject-all)" : (classFilter.isEmpty() ? "(none)" : classFilter)));
 
-        setupSoot(androidPlatforms, apkInput, outputDir);
+        setupSoot(androidPlatforms, apkInput, outputDir, injectAll);
 
         PackManager.v().getPack("jtp").add(
             new Transform("jtp.LogInjectorTransform", new BodyTransformer() {
@@ -65,8 +72,8 @@ public class LogInjector {
                 protected void internalTransform(Body body, String phaseName, Map<String, String> opts) {
                     SootMethod method = body.getMethod();
 
-                    // Class filter
-                    if (!classFilter.isEmpty()) {
+                    // Class filter — skip if --inject-all flag set
+                    if (!injectAll && !classFilter.isEmpty()) {
                         String className = method.getDeclaringClass().getName().toLowerCase();
                         boolean matches = false;
                         for (String f : classFilter) {
@@ -98,14 +105,14 @@ public class LogInjector {
     }
 
     private static void listClasses(String androidPlatforms, String apkPath) {
-        setupSoot(androidPlatforms, apkPath, "/tmp/soot-list-classes-output");
+        setupSoot(androidPlatforms, apkPath, "/tmp/soot-list-classes-output", false);
         Scene.v().loadNecessaryClasses();
         for (SootClass sc : Scene.v().getApplicationClasses()) {
             System.out.println(sc.getName());
         }
     }
 
-    private static void setupSoot(String androidPlatforms, String apkInput, String outputDir) {
+    private static void setupSoot(String androidPlatforms, String apkInput, String outputDir, boolean injectAll) {
         G.reset();
 
         Options.v().set_allow_phantom_refs(true);
@@ -125,14 +132,17 @@ public class LogInjector {
         // Exclude Android/Java framework and common library packages from body loading.
         // Soot still resolves their signatures (phantom refs) but won't JImplify them,
         // which is the main source of heap exhaustion on large APKs.
-        List<String> excludes = new ArrayList<>(Arrays.asList(
-            "java.", "javax.", "sun.", "android.", "androidx.",
-            "com.google.android.", "com.android.",
-            "kotlin.", "kotlinx.",
-            "org.apache.", "org.xml.", "org.json.", "org.w3c.",
-            "junit.", "dalvik."
-        ));
-        Options.v().set_exclude(excludes);
+        // Skip exclusions if --inject-all flag set.
+        if (!injectAll) {
+            List<String> excludes = new ArrayList<>(Arrays.asList(
+                "java.", "javax.", "sun.", "android.", "androidx.",
+                "com.google.android.", "com.android.",
+                "kotlin.", "kotlinx.",
+                "org.apache.", "org.xml.", "org.json.", "org.w3c.",
+                "junit.", "dalvik."
+            ));
+            Options.v().set_exclude(excludes);
+        }
 
         List<String> processDirs = new ArrayList<>();
         processDirs.add(apkInput);
@@ -150,22 +160,40 @@ public class LogInjector {
         SootClass logClass   = Scene.v().getSootClass("android.util.Log");
         SootMethod logMethod = logClass.getMethod("int d(java.lang.String,java.lang.String)");
 
+        // Find insertion point: after IdentityStmts + first specialinvoke (for constructors)
+        Unit insertionPoint = null;
+        boolean foundSpecialInvoke = false;
+        for (Unit u : units) {
+            if (u instanceof IdentityStmt) continue;
+            // In constructors, skip past the super() call (specialinvoke)
+            if (!foundSpecialInvoke && u instanceof InvokeStmt) {
+                InvokeStmt invoke = (InvokeStmt) u;
+                if (invoke.getInvokeExpr() instanceof SpecialInvokeExpr) {
+                    foundSpecialInvoke = true;
+                    continue;
+                }
+            }
+            insertionPoint = u;
+            break;
+        }
+        if (insertionPoint == null) {
+            // If no insertion point found, insert before return
+            for (Unit u : units) {
+                if (u instanceof ReturnVoidStmt) {
+                    insertionPoint = u;
+                    break;
+                }
+            }
+        }
+
+        // Log method signature only (no parameters)
         Stmt logStmt = Jimple.v().newInvokeStmt(
             Jimple.v().newStaticInvokeExpr(
                 logMethod.makeRef(),
                 StringConstant.v(LOG_TAG),
-                StringConstant.v("Entering method: " + sig)
+                StringConstant.v("Entering: " + sig)
             )
         );
-
-        // Insert after all IdentityStmts (parameter/this assignments)
-        Unit insertionPoint = null;
-        for (Unit u : units) {
-            if (!(u instanceof IdentityStmt)) {
-                insertionPoint = u;
-                break;
-            }
-        }
 
         if (insertionPoint == null) {
             units.addFirst(logStmt);

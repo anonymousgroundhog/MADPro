@@ -200,10 +200,15 @@ function runProcess(job, cmd, args, opts = {}) {
 
 // ── LogInjector compilation ──────────────────────────────────────────────────
 
-async function ensureInjectorCompiled(job) {
-  if (fs.existsSync(INJECTOR_CLASS)) {
+async function ensureInjectorCompiled(job, forceRecompile = false) {
+  if (fs.existsSync(INJECTOR_CLASS) && !forceRecompile) {
     pushLine(job, "[INFO] LogInjector already compiled.");
     return true;
+  }
+
+  if (forceRecompile && fs.existsSync(INJECTOR_CLASS)) {
+    pushLine(job, "[INFO] Force recompile: removing existing .class file…");
+    try { fs.unlinkSync(INJECTOR_CLASS); } catch (e) { pushLine(job, `[WARN] Could not delete old .class: ${e.message}`); }
   }
 
   if (!fs.existsSync(INJECTOR_SRC)) {
@@ -346,7 +351,7 @@ function _startGPlayDownload(job, { categories, count, outputDir, deviceSerial }
 
 // ── Log Injection ─────────────────────────────────────────────────────────────
 
-function startInjection({ apkDir, patterns, outputDir }) {
+function startInjection({ apkDir, patterns, outputDir, injectAll }) {
   const job = createJob();
 
   (async () => {
@@ -402,10 +407,11 @@ function startInjection({ apkDir, patterns, outputDir }) {
         "-XX:SoftRefLRUPolicyMSPerMB=0",
         "-cp", cp,
         "LogInjector",
-        platforms,
-        target.primaryApk,
-        appOutDir,
       ];
+      if (injectAll) javaArgs.push("--inject-all");
+      javaArgs.push(platforms);
+      javaArgs.push(target.primaryApk);
+      javaArgs.push(appOutDir);
       if (filterCsv) javaArgs.push(filterCsv);
 
       const javaBin = findBin("java") || "java";
@@ -510,9 +516,9 @@ async function signOutputApks(job, outputDir) {
 }
 
 // Compile only (no injection) — for the "Compile" button
-function startCompile() {
+function startCompile({ forceRecompile = false } = {}) {
   const job = createJob();
-  ensureInjectorCompiled(job).then(ok => finishJob(job, ok ? null : "Compilation failed"));
+  ensureInjectorCompiled(job, forceRecompile).then(ok => finishJob(job, ok ? null : "Compilation failed"));
   return job.id;
 }
 

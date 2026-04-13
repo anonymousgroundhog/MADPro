@@ -6,7 +6,11 @@
       "Bash(grep -n \"^}\\\\$\\\\|^}$\\\\|return \\\\`\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
       "Bash(grep -n \"^\\\\`$\\\\|^}\\\\`$\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
       "Bash(grep -n \"^\\\\`;\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
-      "Bash(grep -n 'backtick\\\\|^`$\\\\|^`;$' /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)"
+      "Bash(grep -n 'backtick\\\\|^`$\\\\|^`;$' /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Read(//home/spsand1/.claude/plugins/cache/caveman/caveman/63e797cd753b/**)",
+      "Bash(python3 -m scripts.caveman-compress \"/home/spsand1/Documents/Projects/MADPro/apk-dashboard/CLAUDE.md\")",
+      "Bash(python3 scripts/__main__.py \"/home/spsand1/Documents/Projects/MADPro/apk-dashboard/CLAUDE.md\")",
+      "Bash(python3 -m scripts /home/spsand1/Documents/Projects/MADPro/apk-dashboard/CLAUDE.md)"
     ]
   }
 }

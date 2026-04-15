@@ -3,7 +3,7 @@ Bridge script: called by tools-api.js to download APKs via the Play Store
 using Appium + ADB (no Google account token required).
 
 Usage:
-  python gplay_download.py <device_serial_or_""> <output_dir> <pkg1> [pkg2 ...]
+  python gplay_download.py <device_serial_or_""> <output_dir> <timeout_sec> <pkg1> [pkg2 ...]
 
 Output is line-buffered plain text streamed to stdout.
 Exit code 0 = success, non-zero = failure.
@@ -21,13 +21,14 @@ def log(msg: str):
 
 
 def main():
-    if len(sys.argv) < 4:
-        log("Usage: gplay_download.py <device_serial|''>  <output_dir>  <pkg> [pkg ...]")
+    if len(sys.argv) < 5:
+        log("Usage: gplay_download.py <device_serial|''>  <output_dir>  <timeout_sec>  <pkg> [pkg ...]")
         sys.exit(1)
 
     device_serial = sys.argv[1] if sys.argv[1] else None
     output_dir    = sys.argv[2]
-    packages      = sys.argv[3:]
+    timeout_sec   = int(sys.argv[3]) if sys.argv[3].isdigit() else 180
+    packages      = sys.argv[4:]
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -59,6 +60,7 @@ def main():
         output_dir=output_dir,
         device_serial=device_serial,
         on_output=log,
+        timeout_sec=timeout_sec,
     )
 
     log(f"--- Done: {len(pulled)}/{len(packages)} app(s) downloaded ---")

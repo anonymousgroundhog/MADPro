@@ -186,11 +186,22 @@ function runProcess(job, cmd, args, opts = {}) {
     const onLine = l => { if (l.trim()) pushLine(job, l.trim()); };
     proc.stdout?.on("data", d => d.toString().split("\n").forEach(onLine));
     proc.stderr?.on("data", d => d.toString().split("\n").forEach(onLine));
+
+    let killTimer = null;
+    if (opts.timeoutMs > 0) {
+      killTimer = setTimeout(() => {
+        pushLine(job, `[TIMEOUT] Process killed after ${opts.timeoutMs}ms`);
+        try { proc.kill("SIGTERM"); } catch {}
+      }, opts.timeoutMs);
+    }
+
     proc.on("close", code => {
+      if (killTimer) clearTimeout(killTimer);
       job._proc = null;
       resolve(code === 0);
     });
     proc.on("error", err => {
+      if (killTimer) clearTimeout(killTimer);
       pushLine(job, `ERROR: ${err.message}`);
       job._proc = null;
       resolve(false);
@@ -259,13 +270,116 @@ const SEEDS = {
   MAPS_AND_NAVIGATION: ["com.google.android.apps.maps","com.waze","com.here.app.maps","com.citymapper.app.release"],
 };
 
-function startDownload({ categories, count, outputDir, backend, deviceSerial }) {
+// ── XAPK Extraction & APK Normalization ────────────────────────────────────────
+
+/**
+ * Normalize APK files in a directory: rename main APK to base.apk.
+ * Handles both XAPK extractions and direct APK downloads where main is named after package.
+ */
+function normalizeApksInDir(dirPath, job = null) {
+  if (!fs.existsSync(dirPath)) return;
+
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  const apkFiles = entries.filter(e => e.isFile() && e.name.toLowerCase().endsWith('.apk'));
+
+  if (apkFiles.length === 0) return;
+
+  // Check if base.apk already exists
+  const hasBase = apkFiles.some(f => f.name.toLowerCase() === 'base.apk');
+  if (hasBase) return;
+
+  const dirName = path.basename(dirPath);
+  let mainApk = null;
+
+  // Priority 1: app.apk
+  mainApk = apkFiles.find(f => f.name.toLowerCase() === 'app.apk');
+
+  // Priority 2: APK matching directory name (package name)
+  if (!mainApk) {
+    mainApk = apkFiles.find(f => f.name.toLowerCase().startsWith(dirName.toLowerCase()));
+  }
+
+  // Priority 3: First non-config APK
+  if (!mainApk) {
+    mainApk = apkFiles.find(f => {
+      const name = f.name.toLowerCase();
+      return !name.startsWith('config.') && !name.startsWith('split_config.');
+    });
+  }
+
+  if (mainApk) {
+    const oldPath = path.join(dirPath, mainApk.name);
+    const newPath = path.join(dirPath, 'base.apk');
+    try {
+      fs.renameSync(oldPath, newPath);
+      if (job) pushLine(job, `    Renamed ${mainApk.name} → base.apk`);
+    } catch (err) {
+      if (job) pushLine(job, `    [WARN] Could not rename ${mainApk.name}: ${err.message}`);
+    }
+  }
+}
+
+/**
+ * Extract XAPK files in a directory.
+ * XAPK is a ZIP archive containing base.apk and optional split APKs.
+ * Renames main APK to base.apk if needed, extracts all APKs.
+ */
+function extractXapksInDir(dirPath, job = null) {
+  if (!fs.existsSync(dirPath)) return;
+
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  const xapkFiles = entries.filter(e => e.isFile() && e.name.toLowerCase().endsWith('.xapk'));
+
+  for (const entry of xapkFiles) {
+    const xapkPath = path.join(dirPath, entry.name);
+    const xapkNameNoExt = entry.name.slice(0, -5); // remove .xapk
+    const extractDir = path.join(dirPath, xapkNameNoExt);
+
+    try {
+      if (job) pushLine(job, `  Extracting XAPK: ${entry.name}`);
+
+      // Extract XAPK (ZIP format)
+      fs.mkdirSync(extractDir, { recursive: true });
+      execSync(`unzip -q -o "${xapkPath}" -d "${extractDir}"`, { stdio: 'pipe' });
+
+      // Normalize APKs: rename main to base.apk
+      normalizeApksInDir(extractDir, job);
+
+      // Count APK files
+      const files = fs.readdirSync(extractDir);
+      const apkFiles = files.filter(f => f.toLowerCase().endsWith('.apk'));
+      if (job && apkFiles.length > 0) pushLine(job, `    Found ${apkFiles.length} APK file(s)`);
+
+      // Clean up: remove manifest.json and other non-APK files
+      for (const file of files) {
+        if (!file.toLowerCase().endsWith('.apk')) {
+          const filePath = path.join(extractDir, file);
+          if (fs.statSync(filePath).isFile()) {
+            fs.unlinkSync(filePath);
+          }
+        }
+      }
+
+      // Remove the original XAPK file
+      fs.unlinkSync(xapkPath);
+      if (job) pushLine(job, `  [OK] Extracted: ${xapkNameNoExt}`);
+    } catch (err) {
+      if (job) {
+        pushLine(job, `  [ERROR] Failed to extract XAPK ${entry.name}: ${err.message}`);
+      } else {
+        console.error(`Failed to extract XAPK ${xapkPath}: ${err.message}`);
+      }
+    }
+  }
+}
+
+function startDownload({ categories, count, outputDir, backend, deviceSerial, timeoutMs = 0 }) {
   const job = createJob();
 
   if (backend === "google-play") {
-    _startGPlayDownload(job, { categories, count, outputDir, deviceSerial });
+    _startGPlayDownload(job, { categories, count, outputDir, deviceSerial, timeoutMs });
   } else {
-    _startApkPureDownload(job, { categories, count, outputDir });
+    _startApkPureDownload(job, { categories, count, outputDir, timeoutMs });
   }
 
   return job.id;
@@ -273,7 +387,7 @@ function startDownload({ categories, count, outputDir, backend, deviceSerial }) 
 
 // ── ApkPure via apkeep ────────────────────────────────────────────────────────
 
-function _startApkPureDownload(job, { categories, count, outputDir }) {
+function _startApkPureDownload(job, { categories, count, outputDir, timeoutMs = 0 }) {
   (async () => {
     fs.mkdirSync(outputDir, { recursive: true });
     const apkeepBin = findBin("apkeep");
@@ -289,18 +403,41 @@ function _startApkPureDownload(job, { categories, count, outputDir }) {
       if (!packages.length) { pushLine(job, `[SKIP] Unknown category: ${catId}`); continue; }
       pushLine(job, `--- Category: ${catId} (${packages.length} app(s)) ---`);
 
-      const catDir = path.join(outputDir, catId);
+      const catDir = path.join(outputDir, catId, "apkpure");
       fs.mkdirSync(catDir, { recursive: true });
 
       for (const pkg of packages) {
         if (job.cancelled) break;
-        pushLine(job, `  Downloading: ${pkg}`);
         const pkgDir = path.join(catDir, pkg);
+
+        // Skip if directory already exists with files
+        if (fs.existsSync(pkgDir) && fs.readdirSync(pkgDir).length > 0) {
+          pushLine(job, `  [SKIP] ${pkg} (already downloaded)`);
+          continue;
+        }
+
+        pushLine(job, `  Downloading: ${pkg}`);
         fs.mkdirSync(pkgDir, { recursive: true });
 
         // apkeep syntax: apkeep -a <pkg> -d <source> <outpath>
-        const ok = await runProcess(job, apkeepBin, ["-a", pkg, "-d", "apk-pure", pkgDir]);
+        const ok = await runProcess(job, apkeepBin, ["-a", pkg, "-d", "apk-pure", pkgDir], { timeoutMs });
         pushLine(job, ok ? `  [OK] ${pkg}` : `  [FAILED] ${pkg}`);
+      }
+    }
+    // Process downloaded files: extract XAPKs and normalize APK names
+    pushLine(job, "--- Processing downloaded files ---");
+    for (const catId of categories) {
+      const catDir = path.join(outputDir, catId, "apkpure");
+      if (fs.existsSync(catDir)) {
+        extractXapksInDir(catDir, job);
+        const pkgDirs = fs.readdirSync(catDir, { withFileTypes: true })
+          .filter(e => e.isDirectory())
+          .map(e => e.name);
+        for (const pkgDir of pkgDirs) {
+          const pkgPath = path.join(catDir, pkgDir);
+          extractXapksInDir(pkgPath, job);
+          normalizeApksInDir(pkgPath, job);
+        }
       }
     }
     finishJob(job);
@@ -309,7 +446,7 @@ function _startApkPureDownload(job, { categories, count, outputDir }) {
 
 // ── Google Play via Appium (Python bridge) ────────────────────────────────────
 
-function _startGPlayDownload(job, { categories, count, outputDir, deviceSerial }) {
+function _startGPlayDownload(job, { categories, count, outputDir, deviceSerial, timeoutMs = 0 }) {
   (async () => {
     fs.mkdirSync(outputDir, { recursive: true });
 
@@ -337,12 +474,30 @@ function _startGPlayDownload(job, { categories, count, outputDir, deviceSerial }
     for (const { catId, packages } of allByCategory) {
       if (job.cancelled) break;
       pushLine(job, `--- Category: ${catId} (${packages.length} app(s)) via Play Store ---`);
-      const catDir = path.join(outputDir, catId);
+      const catDir = path.join(outputDir, catId, "google_play");
       fs.mkdirSync(catDir, { recursive: true });
 
-      const args = [bridgeScript, deviceSerial || "", catDir, ...packages];
-      const ok = await runProcess(job, pythonBin, args);
+      const timeoutSec = timeoutMs > 0 ? Math.floor(timeoutMs / 1000) : 0;
+      const args = [bridgeScript, deviceSerial || "", catDir, timeoutSec, ...packages];
+      const ok = await runProcess(job, pythonBin, args, { timeoutMs });
       if (!ok && !job.cancelled) pushLine(job, `[WARN] Some downloads may have failed for ${catId}`);
+    }
+
+    // Process downloaded files: extract XAPKs and normalize APK names
+    pushLine(job, "--- Processing downloaded files ---");
+    for (const { catId } of allByCategory) {
+      const catDir = path.join(outputDir, catId, "google_play");
+      if (fs.existsSync(catDir)) {
+        extractXapksInDir(catDir, job);
+        const pkgDirs = fs.readdirSync(catDir, { withFileTypes: true })
+          .filter(e => e.isDirectory())
+          .map(e => e.name);
+        for (const pkgDir of pkgDirs) {
+          const pkgPath = path.join(catDir, pkgDir);
+          extractXapksInDir(pkgPath, job);
+          normalizeApksInDir(pkgPath, job);
+        }
+      }
     }
 
     finishJob(job);

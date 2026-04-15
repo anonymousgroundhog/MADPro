@@ -222,7 +222,7 @@ function extractAppPackages(content) {
 // Parse a logcat file and return all SootInjection entries
 function parseLogEntries(absPath) {
   const content = fs.readFileSync(absPath, "utf8");
-  const MARKER = "Entering method: ";
+  const MARKER = "Entering: ";
   const SIG_RE = /^<(.+):\s+(\S+)\s+([^(]+)\(([^)]*)\)>$/;
   const entries = [];
   const seen = new Set();
@@ -247,12 +247,14 @@ function parseLogEntries(absPath) {
 }
 
 // Match a single log entry against a cleaned query string (case-insensitive).
-// Query is the cleaned keyword + "(" e.g. "onCreate("
-// Matches against methodName + "(" so partial method names work.
+// Searches method names (with/without paren) and full signatures.
 function entryMatchesQuery(e, queryLow) {
   if (e.methodName) {
-    const mn = (e.methodName + "(").toLowerCase();
+    const mn = e.methodName.toLowerCase();
     if (mn.indexOf(queryLow) !== -1) return true;
+    // Also match methodName + "(" for consistency with old behavior
+    const mnWithParen = (e.methodName + "(").toLowerCase();
+    if (mnWithParen.indexOf(queryLow) !== -1) return true;
   }
   // Fallback: check full sig for raw entries
   if (e.sig && e.sig.toLowerCase().indexOf(queryLow) !== -1) return true;
@@ -785,6 +787,14 @@ function renderHtml() {
         <div style="display:flex;gap:6px;margin-bottom:10px;">
           <input type="text" id="dlOutputDir" class="tools-input" style="flex:1;" placeholder="~/MADPro_Downloads" />
           <button class="tools-btn-sm" onclick="browseForTools('dlOutputDir')">Browse…</button>
+        </div>
+
+        <label class="tools-label">Download timeout (per app)</label>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;">
+          <input type="number" id="dlTimeoutMin" value="5" min="0" max="60" class="tools-input" style="width:70px;" />
+          <span class="tools-hint">min</span>
+          <input type="number" id="dlTimeoutSec" value="0" min="0" max="59" class="tools-input" style="width:70px;" />
+          <span class="tools-hint">sec</span>
         </div>
 
         <label class="tools-label">Categories</label>
@@ -2442,6 +2452,9 @@ async function startDownload() {
   const count = parseInt(document.getElementById('dlCount').value) || 5;
   const backend = document.querySelector('input[name="dlBackend"]:checked')?.value || 'apkpure';
   const deviceSerial = document.getElementById('deviceSelect')?.value || null;
+  const timeoutMin = parseInt(document.getElementById('dlTimeoutMin').value) || 0;
+  const timeoutSec = parseInt(document.getElementById('dlTimeoutSec').value) || 0;
+  const timeoutMs = (timeoutMin * 60 + timeoutSec) * 1000;
 
   if (backend === 'google-play' && !deviceSerial) {
     appendToolsLog('[ERROR] Google Play download requires a connected device. Connect a device or emulator first.');
@@ -2450,9 +2463,9 @@ async function startDownload() {
 
   document.getElementById('btnStartDownload').disabled = true;
   document.getElementById('btnCancelDownload').disabled = false;
-  appendToolsLog('--- Starting download: ' + categories.length + ' categor(ies), ' + count + ' apps each, backend=' + backend + ' ---');
+  appendToolsLog('--- Starting download: ' + categories.length + ' categor(ies), ' + count + ' apps each, backend=' + backend + ', timeout=' + timeoutMin + 'm' + timeoutSec + 's ---');
 
-  const r = await api('/api/tools/download', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ categories, count, outputDir, backend, deviceSerial }) });
+  const r = await api('/api/tools/download', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ categories, count, outputDir, backend, deviceSerial, timeoutMs }) });
   currentJobs.download = r.jobId;
   streamJob(r.jobId, err => {
     document.getElementById('btnStartDownload').disabled = false;
@@ -2739,7 +2752,7 @@ async function _renderLogPage(file, offset) {
     if (offset === 0) {
       out.innerHTML = '';
       if (!data.total) {
-        out.textContent = '(No SootInjection lines found in this log file)';
+        out.textContent = '(No instrumented method entries found in this log file)';
         document.getElementById('logViewerMeta').textContent = '0 matches in ' + file;
         return;
       }
@@ -3048,11 +3061,11 @@ async function runKeywordSearch() {
 
   out.innerHTML = '<div style="color:var(--text-muted);font-size:.82rem;">Searching…</div>';
 
-  // Clean keywords: strip special chars, search as method name prefix (methodName + "(")
+  // Clean keywords: strip special chars, search in log entries
   var palette = ['#60a5fa','#f472b6','#34d399','#fbbf24','#a78bfa','#f87171','#38bdf8','#fb923c'];
   var kwMeta = keywords.map(function(kw, i) {
     var clean = cleanKeyword(kw);
-    return { original: kw, clean: clean, query: clean + '(', color: palette[i % palette.length] };
+    return { original: kw, clean: clean, query: clean, color: palette[i % palette.length] };
   });
 
   // Fetch search results from server for all keywords in one call
@@ -3076,12 +3089,12 @@ async function runKeywordSearch() {
       var found = pk.count > 0;
       if (found) {}
       var icon = found ? '&#x2713;' : '&#x2717;';
-      var displayQuery = km.clean ? escHtml(km.clean + '(') : '<em style="color:var(--text-muted)">empty after cleaning</em>';
+      var displayQuery = km.clean ? escHtml(km.clean) : '<em style="color:var(--text-muted)">empty after cleaning</em>';
       summaryRows += '<div style="display:flex;align-items:center;gap:8px;font-size:.82rem;line-height:2;">'
         + '<span style="color:' + km.color + ';font-weight:700;width:14px;">' + icon + '</span>'
         + '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + km.color + ';flex-shrink:0;"></span>'
         + '<span style="font-family:monospace;color:' + km.color + ';">' + displayQuery + '</span>'
-        + (km.original !== km.clean + '(' ? '<span style="font-size:.72rem;color:var(--text-muted);">(from: ' + escHtml(km.original) + ')</span>' : '')
+        + (km.original !== km.clean ? '<span style="font-size:.72rem;color:var(--text-muted);">(from: ' + escHtml(km.original) + ')</span>' : '')
         + '<span style="color:var(--text-muted);">' + pk.count + ' match' + (pk.count !== 1 ? 'es' : '') + '</span>'
         + '</div>';
     }
@@ -5790,7 +5803,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // GET /api/logs/search?file=/path&q=["keyword1(","keyword2("]
+  // GET /api/logs/search?file=/path&q=["keyword1","keyword2"]
   if (req.method === "GET" && pathname === "/api/logs/search") {
     const fileParam = reqUrl.searchParams.get("file") || "";
     const qParam    = reqUrl.searchParams.get("q") || "[]";
@@ -6007,13 +6020,13 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  // POST /api/tools/download  { categories, count, outputDir, backend }
+  // POST /api/tools/download  { categories, count, outputDir, backend, timeoutMs }
   if (req.method === "POST" && pathname === "/api/tools/download") {
     const body = await readBody(req);
     let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
     if (!p.categories?.length) return jsonResponse(res, { error: "No categories" }, 400);
     if (!p.outputDir) return jsonResponse(res, { error: "Missing outputDir" }, 400);
-    const jobId = toolsApi.startDownload({ categories: p.categories, count: p.count || 10, outputDir: p.outputDir, backend: p.backend || "apkpure", deviceSerial: p.deviceSerial || null });
+    const jobId = toolsApi.startDownload({ categories: p.categories, count: p.count || 10, outputDir: p.outputDir, backend: p.backend || "apkpure", deviceSerial: p.deviceSerial || null, timeoutMs: p.timeoutMs || 0 });
     return jsonResponse(res, { jobId });
   }
 

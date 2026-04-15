@@ -379,6 +379,7 @@ def download_via_appium(
     device_serial: str | None = None,
     on_output: Callable[[str], None] | None = None,
     stop_event: threading.Event | None = None,
+    timeout_sec: int = 180,
 ) -> list[str]:
     """
     For each package name:
@@ -548,9 +549,10 @@ def download_via_appium(
 
                     log(f"[{package}] Tapping Install...")
                     install_btn.click()
-                    log(f"[{package}] Waiting for installation (up to 3 min)...")
+                    timeout_min = timeout_sec / 60
+                    log(f"[{package}] Waiting for installation (up to {timeout_min:.0f} min)...")
 
-                    done = _find_done_btn(timeout=180)
+                    done = _find_done_btn(timeout=timeout_sec)
                     if stop_event and stop_event.is_set():
                         log("Cancelled.")
                         break

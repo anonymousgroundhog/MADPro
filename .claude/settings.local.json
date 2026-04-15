@@ -101,7 +101,14 @@
       "Bash(curl -s 'http://localhost:3456/')",
       "Bash(npm start *)",
       "Bash(curl -s http://localhost:3000/)",
-      "Bash(curl -s http://localhost:3000/api/tools/status)"
+      "Bash(curl -s http://localhost:3000/api/tools/status)",
+      "Bash(npm run *)",
+      "Bash(curl -s -X POST http://localhost:3456/api/tools/download -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(awk '/^function renderHtml\\\\\\(\\\\\\)/,/^function/ {print NR\": \"$0}' server.js)",
+      "Bash(killall -9 node)",
+      "Bash(killall -9 node sleep 3)",
+      "Bash(kill -9 73882)",
+      "Bash(curl *)"
     ]
   }
 }

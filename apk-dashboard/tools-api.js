@@ -148,12 +148,21 @@ function listAvds() {
 
 let jobCounter = 0;
 const jobs = new Map();
+const MAX_CONCURRENT_JOBS = 2;  // Limit concurrent long operations
 
 function createJob() {
   const id = String(++jobCounter);
   const job = { id, lines: [], done: false, error: null, clients: [], cancelled: false };
   jobs.set(id, job);
   return job;
+}
+
+function getActiveJobCount() {
+  let count = 0;
+  for (const job of jobs.values()) {
+    if (!job.done) count++;
+  }
+  return count;
 }
 
 function pushLine(job, line) {
@@ -181,13 +190,40 @@ function finishJob(job, error = null) {
 function runProcess(job, cmd, args, opts = {}) {
   return new Promise(resolve => {
     if (job.cancelled) return resolve(false);
-    const proc = spawn(cmd, args, { cwd: opts.cwd || PROJECT_ROOT, ...opts });
+    const proc = spawn(cmd, args, {
+      cwd: opts.cwd || PROJECT_ROOT,
+      stdio: ['ignore', 'pipe', 'pipe'],  // Explicit pipes
+      ...opts
+    });
     job._proc = proc;
-    const onLine = l => { if (l.trim()) pushLine(job, l.trim()); };
-    proc.stdout?.on("data", d => d.toString().split("\n").forEach(onLine));
-    proc.stderr?.on("data", d => d.toString().split("\n").forEach(onLine));
+
+    // Line-buffer to prevent hanging on large output
+    let stdoutBuf = '', stderrBuf = '';
+    const flushBuf = (buf, prefix) => {
+      if (buf.trim()) pushLine(job, prefix + buf.trim());
+      return '';
+    };
+
+    const onStdout = d => {
+      stdoutBuf += d.toString();
+      const lines = stdoutBuf.split("\n");
+      stdoutBuf = lines.pop();
+      lines.forEach(l => { if (l.trim()) pushLine(job, l.trim()); });
+    };
+
+    const onStderr = d => {
+      stderrBuf += d.toString();
+      const lines = stderrBuf.split("\n");
+      stderrBuf = lines.pop();
+      lines.forEach(l => { if (l.trim()) pushLine(job, "[ERR] " + l.trim()); });
+    };
+
+    proc.stdout?.on("data", onStdout);
+    proc.stderr?.on("data", onStderr);
 
     let killTimer = null;
+    let progressTimer = null;
+
     if (opts.timeoutMs > 0) {
       killTimer = setTimeout(() => {
         pushLine(job, `[TIMEOUT] Process killed after ${opts.timeoutMs}ms`);
@@ -195,12 +231,24 @@ function runProcess(job, cmd, args, opts = {}) {
       }, opts.timeoutMs);
     }
 
+    // Progress ping: send keepalive every 45s if no output
+    progressTimer = setInterval(() => {
+      const lastLine = job.lines.length > 0 ? job.lines[job.lines.length - 1] : '';
+      if (!lastLine.includes('[PROGRESS]') && !lastLine.includes('[TIMEOUT]')) {
+        pushLine(job, '[PROGRESS] Still running...');
+      }
+    }, 45000);
+
     proc.on("close", code => {
+      clearInterval(progressTimer);
       if (killTimer) clearTimeout(killTimer);
+      stdoutBuf = flushBuf(stdoutBuf, '');
+      stderrBuf = flushBuf(stderrBuf, '[ERR] ');
       job._proc = null;
       resolve(code === 0);
     });
     proc.on("error", err => {
+      clearInterval(progressTimer);
       if (killTimer) clearTimeout(killTimer);
       pushLine(job, `ERROR: ${err.message}`);
       job._proc = null;
@@ -373,11 +421,13 @@ function extractXapksInDir(dirPath, job = null) {
   }
 }
 
-function startDownload({ categories, count, outputDir, backend, deviceSerial, timeoutMs = 0 }) {
+function startDownload({ categories, count, outputDir, backend, deviceSerial, timeoutMs = 0, apiKey, sha256Hashes }) {
   const job = createJob();
 
   if (backend === "google-play") {
     _startGPlayDownload(job, { categories, count, outputDir, deviceSerial, timeoutMs });
+  } else if (backend === "androzoo") {
+    _startAndrozooDownload(job, { outputDir, apiKey, sha256Hashes, timeoutMs });
   } else {
     _startApkPureDownload(job, { categories, count, outputDir, timeoutMs });
   }
@@ -504,12 +554,110 @@ function _startGPlayDownload(job, { categories, count, outputDir, deviceSerial, 
   })().catch(err => finishJob(job, err.message));
 }
 
+// ── Androzoo via curl ────────────────────────────────────────────────────────────
+
+function _startAndrozooDownload(job, { outputDir, apiKey, sha256Hashes, timeoutMs = 0 }) {
+  (async () => {
+    // Create androzoo subdirectory
+    const androzooDir = path.join(outputDir, "androzoo");
+    fs.mkdirSync(androzooDir, { recursive: true });
+    const curlBin = findBin("curl");
+    if (!curlBin) {
+      pushLine(job, "ERROR: curl not found. Required for Androzoo downloads.");
+      return finishJob(job, "curl not found");
+    }
+
+    const androzooUrl = "https://androzoo.uni.lu/api/download";
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < sha256Hashes.length; i++) {
+      if (job.cancelled) break;
+
+      const sha256 = sha256Hashes[i].trim().toLowerCase();
+      if (!sha256.match(/^[a-f0-9]{64}$/)) {
+        pushLine(job, `  [SKIP] Invalid SHA256 format: ${sha256}`);
+        failCount++;
+        continue;
+      }
+
+      const outputFile = path.join(androzooDir, `${sha256}.apk`);
+
+      // Skip if already exists
+      if (fs.existsSync(outputFile)) {
+        pushLine(job, `  [SKIP] ${sha256.substring(0, 8)}... (already exists)`);
+        successCount++;
+        continue;
+      }
+
+      pushLine(job, `Downloading [${i + 1}/${sha256Hashes.length}]: ${sha256.substring(0, 8)}...`);
+
+      // Build curl command as GET request with URL parameters
+      const encodedApiKey = encodeURIComponent(apiKey);
+      const encodedSha256 = encodeURIComponent(sha256);
+      const requestUrl = `${androzooUrl}?apikey=${encodedApiKey}&sha256=${encodedSha256}`;
+
+      const curlArgs = [
+        "-s",
+        "-w", "\n%{http_code}",
+        "-H", "User-Agent: Mozilla/5.0 (Linux; Android 11)",
+        "-o", outputFile,
+        requestUrl
+      ];
+
+      const ok = await runProcess(job, curlBin, curlArgs, { timeoutMs });
+
+      // Check if file exists and validate it's actually an APK
+      const fileExists = fs.existsSync(outputFile);
+      if (!fileExists) {
+        pushLine(job, `  [FAILED] ${sha256.substring(0, 8)}... (no response)`);
+        failCount++;
+        continue;
+      }
+
+      const fileSize = fs.statSync(outputFile).size;
+
+      // Check if response is JSON error (indicates API error)
+      let isError = false;
+      try {
+        const first500 = fs.readFileSync(outputFile, 'utf8').substring(0, 500);
+        if (first500.includes('{"error') || first500.includes('<html') || first500.includes('<!DOCTYPE')) {
+          isError = true;
+        }
+      } catch (e) {
+        // Binary read error is OK, means it's an APK
+      }
+
+      // APK files start with 'PK' (0x504B) zip signature and are typically > 500KB
+      // If < 500KB or is JSON/HTML error, reject it
+      if (!isError && fileSize > 500 * 1024) {
+        pushLine(job, `  [OK] ${sha256.substring(0, 8)}... (${(fileSize / 1024 / 1024).toFixed(1)}MB)`);
+        successCount++;
+      } else {
+        fs.unlinkSync(outputFile);
+        const reason = isError ? 'API error' : `invalid size: ${fileSize} bytes`;
+        pushLine(job, `  [FAILED] ${sha256.substring(0, 8)}... (${reason})`);
+        failCount++;
+      }
+    }
+
+    pushLine(job, `--- Summary: ${successCount} successful, ${failCount} failed ---`);
+    finishJob(job);
+  })().catch(err => finishJob(job, err.message));
+}
+
 // ── Log Injection ─────────────────────────────────────────────────────────────
 
 function startInjection({ apkDir, patterns, outputDir, injectAll }) {
   const job = createJob();
 
   (async () => {
+    // Check concurrent job limit
+    const activeCount = getActiveJobCount();
+    if (activeCount > MAX_CONCURRENT_JOBS) {
+      pushLine(job, `[WARN] ${activeCount} job(s) already running. Proceeding, but performance may be degraded.`);
+    }
+
     // 1. Ensure LogInjector is compiled
     const compiled = await ensureInjectorCompiled(job);
     if (!compiled) return finishJob(job, "Compilation failed");
@@ -557,9 +705,13 @@ function startInjection({ apkDir, patterns, outputDir, injectAll }) {
       const filterCsv = patterns.join(",");
 
       const javaArgs = [
-        "-Xmx8g",
-        "-XX:+UseG1GC",
-        "-XX:SoftRefLRUPolicyMSPerMB=0",
+        "-Xmx6g",                          // Reduced heap to avoid GC pauses
+        "-Xms2g",                          // Min heap for faster startup
+        "-XX:+UseG1GC",                    // G1 garbage collector
+        "-XX:MaxGCPauseMillis=200",        // Limit GC pause time
+        "-XX:+PrintGCDetails",             // Log GC for debugging
+        "-XX:SoftRefLRUPolicyMSPerMB=0",   // Aggressive soft ref clearing
+        "-XX:StringTableSize=1000003",     // Optimize string table
         "-cp", cp,
         "LogInjector",
       ];

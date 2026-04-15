@@ -6,6 +6,7 @@ import soot.util.Chain;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Arrays;
+import java.util.regex.Pattern;
 
 /**
  * Soot transformer that injects Log.d("SootInjection", "Entering method: <sig>")
@@ -51,18 +52,26 @@ public class LogInjector {
         String outputDir        = remainingArgs[2];
         String classFilterCsv   = remainingArgs.length == 4 ? remainingArgs[3] : "";
 
-        final Set<String> classFilter = new HashSet<>();
+        final List<Pattern> classFilterPatterns = new ArrayList<>();
+        final Set<String> classFilterDisplay = new HashSet<>();
         if (!classFilterCsv.isEmpty()) {
             for (String c : classFilterCsv.split(",")) {
                 String t = c.trim();
-                if (!t.isEmpty()) classFilter.add(t.toLowerCase());
+                if (!t.isEmpty()) {
+                    classFilterDisplay.add(t);
+                    // Convert wildcard pattern to regex: com.google.* → com\.google\..*
+                    String regex = t.toLowerCase()
+                        .replace(".", "\\.")      // escape dots
+                        .replace("\\*", ".*");    // * becomes .*
+                    classFilterPatterns.add(Pattern.compile("^" + regex));
+                }
             }
         }
 
         System.out.println("APK input     : " + apkInput);
         System.out.println("Output        : " + outputDir);
         System.out.println("Inject all    : " + (injectAll ? "YES (include framework + ignore patterns)" : "NO (app classes only)"));
-        System.out.println("Class filter  : " + (injectAll ? "(disabled by --inject-all)" : (classFilter.isEmpty() ? "(none)" : classFilter)));
+        System.out.println("Class filter  : " + (injectAll ? "(disabled by --inject-all)" : (classFilterPatterns.isEmpty() ? "(none)" : classFilterDisplay)));
 
         setupSoot(androidPlatforms, apkInput, outputDir, injectAll);
 
@@ -73,11 +82,11 @@ public class LogInjector {
                     SootMethod method = body.getMethod();
 
                     // Class filter — skip if --inject-all flag set
-                    if (!injectAll && !classFilter.isEmpty()) {
+                    if (!injectAll && !classFilterPatterns.isEmpty()) {
                         String className = method.getDeclaringClass().getName().toLowerCase();
                         boolean matches = false;
-                        for (String f : classFilter) {
-                            if (className.contains(f)) { matches = true; break; }
+                        for (Pattern p : classFilterPatterns) {
+                            if (p.matcher(className).find()) { matches = true; break; }
                         }
                         if (!matches) return;
                     }

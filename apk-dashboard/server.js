@@ -777,8 +777,23 @@ function renderHtml() {
         <div style="display:flex;gap:10px;margin-bottom:10px;">
           <label class="radio-opt"><input type="radio" name="dlBackend" value="apkpure" checked onchange="onBackendChange(this)"> ApkPure <span class="tools-hint">(no auth)</span></label>
           <label class="radio-opt"><input type="radio" name="dlBackend" value="google-play" onchange="onBackendChange(this)"> Google Play <span class="tools-hint">(via Appium, device must be signed in)</span></label>
+          <label class="radio-opt"><input type="radio" name="dlBackend" value="androzoo" onchange="onBackendChange(this)"> Androzoo <span class="tools-hint">(API key required)</span></label>
         </div>
         <div id="dlBackendWarn" class="tools-statusrow err" style="display:none;margin-bottom:8px;"></div>
+
+        <div id="dlAndrozooSection" style="display:none;margin-bottom:10px;">
+          <label class="tools-label">Androzoo API Key</label>
+          <input type="password" id="dlAndrozooApiKey" class="tools-input" style="width:100%;margin-bottom:10px;" placeholder="Enter your Androzoo API key" />
+
+          <label class="tools-label">CSV File Path (Python will parse)</label>
+          <div style="display:flex;gap:6px;margin-bottom:10px;">
+            <input type="text" id="dlCsvPath" class="tools-input" style="flex:1;" placeholder="/path/to/your/file.csv" />
+            <button class="tools-btn-sm" onclick="parseCsvFile()">Parse CSV</button>
+          </div>
+
+          <label class="tools-label">SHA256 Hashes (auto-populated or paste manually)</label>
+          <textarea id="dlSha256List" class="tools-input" style="width:100%;height:100px;margin-bottom:10px;font-family:monospace;font-size:0.85rem;" placeholder="Hashes will appear here after parsing CSV, or paste manually (one per line)"></textarea>
+        </div>
 
         <label class="tools-label">Apps per category</label>
         <input type="number" id="dlCount" value="5" min="1" max="50" class="tools-input" style="width:80px;margin-bottom:10px;" />
@@ -797,8 +812,8 @@ function renderHtml() {
           <span class="tools-hint">sec</span>
         </div>
 
-        <label class="tools-label">Categories</label>
-        <div style="display:flex;gap:6px;margin-bottom:6px;">
+        <label class="tools-label" id="dlCatSection">Categories</label>
+        <div id="dlCatButtons" style="display:flex;gap:6px;margin-bottom:6px;">
           <button class="tools-btn-sm" onclick="selectAllCats(true)">All</button>
           <button class="tools-btn-sm" onclick="selectAllCats(false)">None</button>
         </div>
@@ -2422,50 +2437,261 @@ function clearToolsLog() {
 
 function streamJob(jobId, onDone) {
   const es = new EventSource('/api/tools/stream/' + jobId);
+  let lastMessageTime = Date.now();
+  let timeoutWarningShown = false;
+
   es.onmessage = e => {
+    lastMessageTime = Date.now();
+    timeoutWarningShown = false;
     const data = JSON.parse(e.data);
     if (data && data.__done) { es.close(); onDone(data.error); return; }
     appendToolsLog(typeof data === 'string' ? data : JSON.stringify(data));
   };
-  es.onerror = () => { es.close(); onDone('Stream error'); };
+
+  es.onerror = () => {
+    es.close();
+    onDone('Stream connection lost');
+  };
+
+  // Warn if no messages for 120 seconds
+  const warningTimer = setInterval(() => {
+    const noMsgDuration = Date.now() - lastMessageTime;
+    if (noMsgDuration > 120000 && !timeoutWarningShown) {
+      appendToolsLog('[WARN] No updates for ' + (noMsgDuration / 1000 | 0) + 's — operation may be stuck or very slow');
+      timeoutWarningShown = true;
+    }
+  }, 30000);
+
+  // Cleanup on stream close
+  const origClose = es.close.bind(es);
+  es.close = function() {
+    clearInterval(warningTimer);
+    origClose();
+  };
+
   return es;
 }
 
 // ── Download APKs ─────────────────────────────────────────────────────────────
 
+function onCsvFileSelected() {
+  const fileInput = document.getElementById('dlCsvFile');
+  const fileNameSpan = document.getElementById('dlCsvFileName');
+  const textArea = document.getElementById('dlSha256List');
+
+  if (!fileInput.files.length) {
+    fileNameSpan.textContent = '';
+    return;
+  }
+
+  const file = fileInput.files[0];
+  fileNameSpan.textContent = '(' + file.name + ')';
+  appendToolsLog('[OK] File selected: ' + file.name);
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const content = e.target.result;
+      if (!content) {
+        appendToolsLog('[ERROR] File is empty or unreadable');
+        return;
+      }
+      appendToolsLog('[DEBUG] File read, size: ' + content.length + ' bytes');
+
+      // Split by carriage return and newline characters to handle Windows/Unix/Mac line endings
+      const lineSplitPattern = new RegExp('[' + String.fromCharCode(13) + String.fromCharCode(10) + ']+');
+      const lines = content.split(lineSplitPattern).filter(line => line.trim().length > 0);
+
+      appendToolsLog('[DEBUG] Found ' + lines.length + ' non-empty lines');
+
+      if (!lines.length) {
+        appendToolsLog('[ERROR] CSV file has no data lines');
+        return;
+      }
+
+      // Try to identify if first line is a header
+      const firstLine = lines[0].trim().toLowerCase();
+      const isHeader = firstLine.match(/sha256|hash|apk|filename|package|version|url|md5|app/);
+      const dataLines = isHeader ? lines.slice(1) : lines;
+
+      appendToolsLog('[DEBUG] Header detected: ' + (isHeader ? 'yes' : 'no') + ', data lines: ' + dataLines.length);
+
+      // Extract SHA256 hashes from all columns
+      const extractedHashes = [];
+      for (let i = 0; i < dataLines.length; i++) {
+        const line = dataLines[i];
+        const cols = line.split(',');
+
+        // Look for a column with 64-char hex string (SHA256)
+        for (let j = 0; j < cols.length; j++) {
+          const col = cols[j];
+          const trimmed = col.trim();
+          // Check if it's exactly 64 characters and all are hex digits (0-9, A-F, a-f)
+          if (trimmed.length === 64) {
+            let isHex = true;
+            for (let k = 0; k < 64; k++) {
+              const ch = trimmed.charCodeAt(k);
+              // Check if character is 0-9 (48-57), a-f (97-102), or A-F (65-70)
+              if (!((ch >= 48 && ch <= 57) || (ch >= 97 && ch <= 102) || (ch >= 65 && ch <= 70))) {
+                isHex = false;
+                break;
+              }
+            }
+            if (isHex) {
+              extractedHashes.push(trimmed.toLowerCase());
+              break;
+            }
+          }
+        }
+      }
+
+      appendToolsLog('[DEBUG] Extracted ' + extractedHashes.length + ' hashes from ' + dataLines.length + ' data rows');
+
+      if (extractedHashes.length > 0) {
+        textArea.value = extractedHashes.join(String.fromCharCode(10));
+        appendToolsLog('[OK] Extracted ' + extractedHashes.length + ' SHA256 hash(es) from CSV');
+      } else {
+        appendToolsLog('[ERROR] No valid SHA256 hashes found. Hashes must be exactly 64 hex characters (0-9, a-f).');
+        if (dataLines.length > 0) {
+          const firstData = dataLines[0].split(',')[0].trim();
+          appendToolsLog('[DEBUG] First value from first data row: "' + firstData + '" (length: ' + firstData.length + ')');
+        }
+      }
+    } catch (err) {
+      appendToolsLog('[ERROR] CSV parsing error: ' + err.message);
+    }
+  };
+  reader.onerror = function(err) {
+    const errCode = reader.error ? reader.error.code : 'unknown';
+    let errMsg = 'Permission denied or file not accessible';
+    if (errCode === 1) errMsg = 'File not found or not accessible';
+    if (errCode === 2) errMsg = 'Read operation aborted';
+    if (errCode === 3) errMsg = 'Read error (security or I/O issue)';
+    if (errCode === 4) errMsg = 'File encoding error';
+    appendToolsLog('[ERROR] Failed to read file: ' + errMsg + ' (code: ' + errCode + ')');
+  };
+  reader.readAsText(file);
+}
+
+async function parseCsvFile() {
+  const filePath = document.getElementById('dlCsvPath').value.trim();
+  if (!filePath) {
+    appendToolsLog('[ERROR] Please enter a CSV file path');
+    return;
+  }
+
+  // Unescape backslash-escaped spaces from bash copy-paste
+  // Replace \<space> with just <space>
+  let processedPath = filePath;
+  processedPath = processedPath.replace(/\\\s/g, ' ');  // \<whitespace> -> <space>
+
+  appendToolsLog('[OK] Parsing CSV...');
+  appendToolsLog('[WAIT] This may take 10-30 seconds for large files...');
+
+  const timeoutMs = 120000; // 2 minute timeout
+  const startTime = Date.now();
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    const r = await api('/api/tools/parse-csv', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: processedPath }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+    if (r.error) {
+      appendToolsLog('[ERROR] ' + r.error);
+      return;
+    }
+
+    const textArea = document.getElementById('dlSha256List');
+    textArea.value = r.hashes.join(String.fromCharCode(10));
+    appendToolsLog('[OK] Extracted ' + r.count + ' SHA256 hash(es) in ' + elapsed + 's');
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      appendToolsLog('[ERROR] Timeout: CSV parsing took longer than 2 minutes. File may be too large.');
+    } else {
+      appendToolsLog('[ERROR] Failed to parse CSV: ' + err.message);
+    }
+  }
+}
+
 function onBackendChange(radio) {
   const warn = document.getElementById('dlBackendWarn');
+  const androzooSec = document.getElementById('dlAndrozooSection');
+  const catSection = document.getElementById('dlCatSection');
+  const catButtons = document.getElementById('dlCatButtons');
+  const catChecklist = document.getElementById('catChecklist');
+  const dlCountInput = document.getElementById('dlCount');
+
   if (radio.value === 'google-play') {
     warn.textContent = 'Uses Appium to automate the Play Store on your connected device. Device must be signed in to a Google account.';
     warn.style.display = 'block';
     warn.className = 'tools-statusrow warn';
+    androzooSec.style.display = 'none';
+    catSection.style.display = 'block';
+    catButtons.style.display = 'flex';
+    catChecklist.style.display = 'block';
+    dlCountInput.style.display = 'block';
+  } else if (radio.value === 'androzoo') {
+    warn.textContent = '';
+    warn.style.display = 'none';
+    androzooSec.style.display = 'block';
+    catSection.style.display = 'none';
+    catButtons.style.display = 'none';
+    catChecklist.style.display = 'none';
+    dlCountInput.style.display = 'none';
   } else {
     warn.textContent = '';
     warn.style.display = 'none';
+    androzooSec.style.display = 'none';
+    catSection.style.display = 'block';
+    catButtons.style.display = 'flex';
+    catChecklist.style.display = 'block';
+    dlCountInput.style.display = 'block';
   }
 }
 
 async function startDownload() {
-  const categories = [...document.querySelectorAll('.cat-cb:checked')].map(cb => cb.value);
-  if (!categories.length) { appendToolsLog('[WARN] Select at least one category.'); return; }
-  const outputDir = document.getElementById('dlOutputDir').value.trim() || (document.getElementById('dlOutputDir').placeholder);
-  const count = parseInt(document.getElementById('dlCount').value) || 5;
   const backend = document.querySelector('input[name="dlBackend"]:checked')?.value || 'apkpure';
-  const deviceSerial = document.getElementById('deviceSelect')?.value || null;
+  const outputDir = document.getElementById('dlOutputDir').value.trim() || (document.getElementById('dlOutputDir').placeholder);
   const timeoutMin = parseInt(document.getElementById('dlTimeoutMin').value) || 0;
   const timeoutSec = parseInt(document.getElementById('dlTimeoutSec').value) || 0;
   const timeoutMs = (timeoutMin * 60 + timeoutSec) * 1000;
 
-  if (backend === 'google-play' && !deviceSerial) {
-    appendToolsLog('[ERROR] Google Play download requires a connected device. Connect a device or emulator first.');
-    return;
+  let reqBody;
+  if (backend === 'androzoo') {
+    const apiKey = document.getElementById('dlAndrozooApiKey').value.trim();
+    if (!apiKey) { appendToolsLog('[ERROR] Androzoo API key is required.'); return; }
+    const sha256Text = document.getElementById('dlSha256List').value.trim();
+    if (!sha256Text) { appendToolsLog('[ERROR] Enter at least one SHA256 hash.'); return; }
+    const sha256Hashes = sha256Text.split(String.fromCharCode(10)).map(h => h.trim()).filter(h => h.length > 0);
+    if (!sha256Hashes.length) { appendToolsLog('[ERROR] Enter at least one SHA256 hash.'); return; }
+    reqBody = { backend, outputDir, apiKey, sha256Hashes, timeoutMs };
+    appendToolsLog('--- Starting Androzoo download: ' + sha256Hashes.length + ' app(s), timeout=' + timeoutMin + 'm' + timeoutSec + 's ---');
+  } else {
+    const categories = [...document.querySelectorAll('.cat-cb:checked')].map(cb => cb.value);
+    if (!categories.length) { appendToolsLog('[WARN] Select at least one category.'); return; }
+    const count = parseInt(document.getElementById('dlCount').value) || 5;
+    const deviceSerial = document.getElementById('deviceSelect')?.value || null;
+    if (backend === 'google-play' && !deviceSerial) {
+      appendToolsLog('[ERROR] Google Play download requires a connected device. Connect a device or emulator first.');
+      return;
+    }
+    reqBody = { categories, count, outputDir, backend, deviceSerial, timeoutMs };
+    appendToolsLog('--- Starting download: ' + categories.length + ' categor(ies), ' + count + ' apps each, backend=' + backend + ', timeout=' + timeoutMin + 'm' + timeoutSec + 's ---');
   }
 
   document.getElementById('btnStartDownload').disabled = true;
   document.getElementById('btnCancelDownload').disabled = false;
-  appendToolsLog('--- Starting download: ' + categories.length + ' categor(ies), ' + count + ' apps each, backend=' + backend + ', timeout=' + timeoutMin + 'm' + timeoutSec + 's ---');
 
-  const r = await api('/api/tools/download', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ categories, count, outputDir, backend, deviceSerial, timeoutMs }) });
+  const r = await api('/api/tools/download', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(reqBody) });
   currentJobs.download = r.jobId;
   streamJob(r.jobId, err => {
     document.getElementById('btnStartDownload').disabled = false;
@@ -6020,14 +6246,77 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // POST /api/tools/parse-csv  { filePath }
+  if (req.method === "POST" && pathname === "/api/tools/parse-csv") {
+    const body = await readBody(req);
+    let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
+    if (!p.filePath) return jsonResponse(res, { error: "Missing filePath" }, 400);
+
+    // Normalize the path - remove duplicate slashes and unescape spaces
+    let filePath = p.filePath.replace(/\/+/g, '/'); // Remove duplicate slashes
+    filePath = filePath.replace(/\\\s/g, ' '); // Unescape backslash-spaces from bash
+    console.log(`[CSV Parser] Input: ${p.filePath}`);
+    console.log(`[CSV Parser] Normalized: ${filePath}`);
+
+    // Use Python to parse CSV and extract hashes
+    const { execSync } = require("child_process");
+    try {
+      const tmpScript = path.join(os.tmpdir(), `parse_csv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.py`);
+      const pythonCode = `import csv
+import sys
+try:
+    hashes = []
+    row_count = 0
+    with open(${JSON.stringify(filePath)}, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        for row in reader:
+            row_count += 1
+            if not row or not row[0]:
+                continue
+            value = row[0].strip()
+            # Check if it's a 64-char hex string (SHA256)
+            if len(value) == 64 and all(c in '0123456789abcdefABCDEF' for c in value):
+                hashes.append(value.lower())
+                if len(hashes) >= 10000:  # Limit to 10k hashes
+                    break
+            if row_count % 100000 == 0:
+                print('PROGRESS:' + str(row_count) + '|' + str(len(hashes)), file=sys.stderr)
+    for h in hashes:
+        print(h)
+except Exception as e:
+    print('ERROR:' + str(e), file=sys.stderr)
+    sys.exit(1)
+`;
+      fs.writeFileSync(tmpScript, pythonCode, 'utf8');
+      const result = execSync(`python3 "${tmpScript}"`, { encoding: "utf8", maxBuffer: 50 * 1024 * 1024 }).trim();
+      fs.unlinkSync(tmpScript);
+
+      if (result.startsWith('ERROR:')) {
+        return jsonResponse(res, { error: result.substring(6) }, 400);
+      }
+      const hashes = result ? result.split(String.fromCharCode(10)) : [];
+      return jsonResponse(res, { hashes, count: hashes.length });
+    } catch (err) {
+      return jsonResponse(res, { error: "CSV parsing failed: " + err.message }, 400);
+    }
+  }
+
   // POST /api/tools/download  { categories, count, outputDir, backend, timeoutMs }
   if (req.method === "POST" && pathname === "/api/tools/download") {
     const body = await readBody(req);
     let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
-    if (!p.categories?.length) return jsonResponse(res, { error: "No categories" }, 400);
     if (!p.outputDir) return jsonResponse(res, { error: "Missing outputDir" }, 400);
-    const jobId = toolsApi.startDownload({ categories: p.categories, count: p.count || 10, outputDir: p.outputDir, backend: p.backend || "apkpure", deviceSerial: p.deviceSerial || null, timeoutMs: p.timeoutMs || 0 });
-    return jsonResponse(res, { jobId });
+
+    if (p.backend === "androzoo") {
+      if (!p.apiKey) return jsonResponse(res, { error: "Missing Androzoo API key" }, 400);
+      if (!p.sha256Hashes?.length) return jsonResponse(res, { error: "No SHA256 hashes provided" }, 400);
+      const jobId = toolsApi.startDownload({ backend: "androzoo", outputDir: p.outputDir, apiKey: p.apiKey, sha256Hashes: p.sha256Hashes, timeoutMs: p.timeoutMs || 0 });
+      return jsonResponse(res, { jobId });
+    } else {
+      if (!p.categories?.length) return jsonResponse(res, { error: "No categories" }, 400);
+      const jobId = toolsApi.startDownload({ categories: p.categories, count: p.count || 10, outputDir: p.outputDir, backend: p.backend || "apkpure", deviceSerial: p.deviceSerial || null, timeoutMs: p.timeoutMs || 0 });
+      return jsonResponse(res, { jobId });
+    }
   }
 
   // POST /api/tools/inject  { apkDir, patterns, outputDir, injectAll }

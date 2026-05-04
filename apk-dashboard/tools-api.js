@@ -13,6 +13,7 @@ const { execSync, spawn, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { fetchTopPackages } = require("./playstore");
 
 const PROJECT_ROOT  = path.resolve(__dirname, "..");
 const JAR_LIBS_DIR  = path.join(PROJECT_ROOT, "jar_libs");
@@ -421,6 +422,29 @@ function extractXapksInDir(dirPath, job = null) {
   }
 }
 
+// Resolve packages for a category: scrape Play Store top charts, fall back to SEEDS,
+// dedupe and trim to `count`.
+async function resolveCategoryPackages(catId, count, job = null) {
+  let pkgs = [];
+  try {
+    pkgs = await fetchTopPackages(catId, count);
+    if (job) pushLine(job, `[INFO] ${catId}: scraped ${pkgs.length} package(s) from Play Store`);
+  } catch (err) {
+    if (job) pushLine(job, `[WARN] ${catId}: scrape failed: ${err.message}`);
+  }
+  // Merge with seed list to fill any shortfall and ensure deterministic floor.
+  const seeds = SEEDS[catId] || [];
+  const seen = new Set(pkgs);
+  for (const s of seeds) {
+    if (pkgs.length >= count) break;
+    if (!seen.has(s)) { pkgs.push(s); seen.add(s); }
+  }
+  if (job && pkgs.length < count) {
+    pushLine(job, `[WARN] ${catId}: only ${pkgs.length}/${count} package(s) available — Play Store category pages cap visible apps without authenticated API access.`);
+  }
+  return pkgs.slice(0, count);
+}
+
 function startDownload({ categories, count, outputDir, backend, deviceSerial, timeoutMs = 0, apiKey, sha256Hashes }) {
   const job = createJob();
 
@@ -449,8 +473,8 @@ function _startApkPureDownload(job, { categories, count, outputDir, timeoutMs = 
 
     for (const catId of categories) {
       if (job.cancelled) break;
-      const packages = (SEEDS[catId] || []).slice(0, count);
-      if (!packages.length) { pushLine(job, `[SKIP] Unknown category: ${catId}`); continue; }
+      const packages = await resolveCategoryPackages(catId, count, job);
+      if (!packages.length) { pushLine(job, `[SKIP] No packages for category: ${catId}`); continue; }
       pushLine(job, `--- Category: ${catId} (${packages.length} app(s)) ---`);
 
       const catDir = path.join(outputDir, catId, "apkpure");
@@ -512,7 +536,7 @@ function _startGPlayDownload(job, { categories, count, outputDir, deviceSerial, 
     // Collect all packages across categories
     const allByCategory = [];
     for (const catId of categories) {
-      const packages = (SEEDS[catId] || []).slice(0, count);
+      const packages = await resolveCategoryPackages(catId, count, job);
       if (packages.length) allByCategory.push({ catId, packages });
     }
 
@@ -529,7 +553,9 @@ function _startGPlayDownload(job, { categories, count, outputDir, deviceSerial, 
 
       const timeoutSec = timeoutMs > 0 ? Math.floor(timeoutMs / 1000) : 0;
       const args = [bridgeScript, deviceSerial || "", catDir, timeoutSec, ...packages];
-      const ok = await runProcess(job, pythonBin, args, { timeoutMs });
+      // timeoutMs from UI = per-app cap, enforced inside python loop via timeoutSec arg.
+      // Parent process timeout disabled — otherwise one slow app kills entire batch.
+      const ok = await runProcess(job, pythonBin, args, { timeoutMs: 0 });
       if (!ok && !job.cancelled) pushLine(job, `[WARN] Some downloads may have failed for ${catId}`);
     }
 
@@ -1021,6 +1047,70 @@ function cancelJob(jobId) {
   return true;
 }
 
+// ── Bulk uninstall ────────────────────────────────────────────────────────────
+//
+// Uninstalls all packages for the selected categories via `adb uninstall`.
+// Resolves the same package list used during download (Play Store top charts +
+// SEEDS fallback), then iterates per-pkg. Skips packages that are not present.
+function startUninstallAll({ categories, count, deviceSerial }) {
+  const job = createJob();
+
+  (async () => {
+    const adb = findAdb() || "adb";
+    const s = deviceSerial ? ["-s", deviceSerial] : [];
+
+    if (!categories || !categories.length) {
+      pushLine(job, "[ERROR] No categories selected.");
+      return finishJob(job, "no categories");
+    }
+
+    // Build distinct package set
+    const seen = new Set();
+    const pkgs = [];
+    for (const catId of categories) {
+      if (job.cancelled) break;
+      const list = await resolveCategoryPackages(catId, count, job);
+      for (const p of list) if (!seen.has(p)) { seen.add(p); pkgs.push(p); }
+    }
+
+    if (!pkgs.length) {
+      pushLine(job, "[WARN] No packages resolved for selected categories.");
+      return finishJob(job);
+    }
+
+    pushLine(job, `[INFO] Attempting uninstall of ${pkgs.length} package(s) on device ${deviceSerial || "(default)"}.`);
+
+    let removed = 0, skipped = 0, failed = 0;
+    for (const pkg of pkgs) {
+      if (job.cancelled) break;
+
+      // Check presence first; skip uninstall on apps not on device to keep log clean
+      const probe = spawnSync(adb, [...s, "shell", "pm", "path", "--user", "0", pkg], { encoding: "utf8", timeout: 10000 });
+      const present = (probe.stdout || "").includes("package:");
+      if (!present) {
+        pushLine(job, `[SKIP] ${pkg} (not installed)`);
+        skipped++;
+        continue;
+      }
+
+      const r = spawnSync(adb, [...s, "uninstall", pkg], { encoding: "utf8", timeout: 30000 });
+      const out = (r.stdout || "") + (r.stderr || "");
+      if (/^Success/i.test(out.trim())) {
+        pushLine(job, `[OK] Uninstalled ${pkg}`);
+        removed++;
+      } else {
+        pushLine(job, `[FAIL] ${pkg}: ${out.trim() || "exit " + r.status}`);
+        failed++;
+      }
+    }
+
+    pushLine(job, `[DONE] removed=${removed} skipped=${skipped} failed=${failed} of ${pkgs.length}`);
+    finishJob(job);
+  })().catch(err => finishJob(job, err.message));
+
+  return job.id;
+}
+
 module.exports = {
   checkTools,
   listAdbDevices,
@@ -1029,6 +1119,7 @@ module.exports = {
   startInjection,
   startCompile,
   startInstrumentation,
+  startUninstallAll,
   cancelJob,
   getJob: (id) => jobs.get(id),
 };

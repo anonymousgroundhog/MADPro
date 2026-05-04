@@ -108,7 +108,8 @@
       "Bash(killall -9 node)",
       "Bash(killall -9 node sleep 3)",
       "Bash(kill -9 73882)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(npm view *)"
     ]
   }
 }

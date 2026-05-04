@@ -11,12 +11,39 @@ Requirements (auto-installed via setup_appium()):
 
 Python dependency (pip install Appium-Python-Client) is already available.
 """
+import json
 import os
 import re
 import subprocess
 import threading
 import time
 from typing import Callable
+
+SKIP_LIST_FILENAME = ".skip_list.json"
+
+
+def _load_skip_list(output_dir: str) -> dict:
+    path = os.path.join(output_dir, SKIP_LIST_FILENAME)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path) as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_skip_entry(output_dir: str, package: str, reason: str):
+    path = os.path.join(output_dir, SKIP_LIST_FILENAME)
+    data = _load_skip_list(output_dir)
+    data[package] = {"reason": reason, "ts": int(time.time())}
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+    except OSError:
+        pass
 
 
 # ------------------------------------------------------------------ #
@@ -307,10 +334,17 @@ def _find_adb() -> str:
 
 
 def _pull_apks(serial: str, package: str, output_dir: str,
-               on_output: Callable[[str], None] | None = None) -> list[str]:
+               on_output: Callable[[str], None] | None = None,
+               timeout_sec: int = 60,
+               stop_event: threading.Event | None = None) -> list[str]:
     """
     Pulls ALL APK files for a package (base APK + all split/library APKs)
     using `pm path --user 0` which lists every installed path.
+
+    Polls `pm path` until the package is registered or `timeout_sec` elapses
+    (Play Store reports "Installed" via UI before the package manager has
+    committed the install on slow devices). On total failure, removes
+    `output_dir` if it's empty so failed installs do not leave orphans behind.
 
     Returns a list of successfully pulled local file paths.
     """
@@ -320,29 +354,70 @@ def _pull_apks(serial: str, package: str, output_dir: str,
 
     adb = _find_adb()
 
-    # `pm path --user 0 <pkg>` returns one line per APK:
-    #   package:/data/app/.../base.apk
-    #   package:/data/app/.../split_config.arm64_v8a.apk
-    #   …
-    # Fall back to plain `pm path` if --user 0 isn't supported.
-    device_paths = []
-    for pm_args in [["pm", "path", "--user", "0", package],
-                    ["pm", "path", package]]:
+    def _cleanup_empty_dir():
         try:
-            r = subprocess.run(
-                [adb, "-s", serial, "shell"] + pm_args,
-                capture_output=True, text=True, timeout=15,
-            )
-            paths = re.findall(r"package:(.+\.apk)", r.stdout)
+            if os.path.isdir(output_dir) and not os.listdir(output_dir):
+                os.rmdir(output_dir)
+        except Exception:
+            pass
+
+    pm_strategies = [
+        ["pm", "path", "--user", "0", package],
+        ["pm", "path", package],
+        ["cmd", "package", "path", package],
+        ["pm", "list", "packages", "-f", package],  # last resort, format differs
+    ]
+
+    device_paths: list[str] = []
+    deadline = time.time() + max(int(timeout_sec or 0), 5)
+    poll_interval = 5  # seconds between probes
+    attempt = 0
+    last_progress_log = 0.0
+    while time.time() < deadline:
+        if stop_event and stop_event.is_set():
+            log(f"  [{package}] pm path polling cancelled.")
+            _cleanup_empty_dir()
+            return []
+        attempt += 1
+        for pm_args in pm_strategies:
+            try:
+                r = subprocess.run(
+                    [adb, "-s", serial, "shell"] + pm_args,
+                    capture_output=True, text=True, timeout=15,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                log(f"  adb pm path failed: {e}")
+                _cleanup_empty_dir()
+                return []
+            stdout = r.stdout or ""
+            # Both `pm path` and `cmd package path` emit `package:/path/to/.apk`.
+            paths = re.findall(r"package:(.+\.apk)", stdout)
+            if not paths and pm_args[:3] == ["pm", "list", "packages"]:
+                # `pm list packages -f <pkg>` emits `package:/path/=<pkg>`.
+                paths = re.findall(r"package:(\S+\.apk)=", stdout)
             if paths:
                 device_paths = [p.strip() for p in paths]
                 break
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            log(f"  adb pm path failed: {e}")
-            return []
+        if device_paths:
+            break
+        # Heartbeat every ~30s so the user/UI knows we're still polling.
+        now = time.time()
+        if now - last_progress_log >= 30:
+            remaining = max(0, int(deadline - now))
+            log(f"  [{package}] Waiting for package manager to register install — "
+                f"{remaining}s of {int(timeout_sec)}s budget remaining (poll {attempt}).")
+            last_progress_log = now
+        # Sleep but wake early if cancelled.
+        slept = 0.0
+        while slept < poll_interval and time.time() < deadline:
+            if stop_event and stop_event.is_set():
+                break
+            time.sleep(0.5)
+            slept += 0.5
 
     if not device_paths:
-        log(f"  Could not locate any APK for {package} on device.")
+        log(f"  Could not locate any APK for {package} on device after {int(timeout_sec)}s.")
+        _cleanup_empty_dir()
         return []
 
     os.makedirs(output_dir, exist_ok=True)
@@ -369,6 +444,7 @@ def _pull_apks(serial: str, package: str, output_dir: str,
         log(f"  [OK] Pulled {len(pulled)}/{len(device_paths)} file(s) to {output_dir}")
     else:
         log(f"  [FAILED] No files pulled for {package}")
+        _cleanup_empty_dir()
 
     return pulled
 
@@ -404,6 +480,20 @@ def download_via_appium(
     if not serial:
         log("ERROR: No Android device/emulator found. Start one in the Device panel.")
         return []
+
+    # Filter out previously-skipped/failed packages so retries don't re-run them.
+    skip_list = _load_skip_list(output_dir)
+    if skip_list:
+        before = len(packages)
+        filtered = [p for p in packages if p not in skip_list]
+        removed = before - len(filtered)
+        if removed:
+            log(f"[SKIP_LIST] Filtering {removed} previously-skipped/failed package(s). "
+                f"Remove {SKIP_LIST_FILENAME} from {output_dir} to retry them.")
+        packages = filtered
+        if not packages:
+            log("[SKIP_LIST] All requested packages already in skip list — nothing to do.")
+            return []
 
     log(f"Connecting to device {serial}...")
 
@@ -477,6 +567,42 @@ def download_via_appium(
             time.sleep(1)
         return None
 
+    def _is_paid_app(timeout: int = 3) -> bool:
+        """
+        Detects whether the current Play Store app page is a paid app.
+        Paid apps replace the 'Install' button with a price button (e.g. "$2.99",
+        "₹99.00", "€1.49") or a 'Buy' label. We probe a few selectors quickly;
+        any match means we should skip rather than tap.
+        """
+        deadline = time.time() + timeout
+        # Price regex: optional currency symbol/code followed by digits and decimal.
+        # Covers $, €, £, ¥, ₹, ₩, R$, A$, CA$, plus 3-letter codes like USD/EUR.
+        price_pattern = (
+            r"^\s*(?:[$€£¥₹₩₪₫₱฿]|R\$|A\$|CA\$|HK\$|NZ\$|S\$|"
+            r"USD|EUR|GBP|JPY|INR|CAD|AUD|CHF|CNY|KRW|MXN|BRL|ZAR)?"
+            r"\s*\d+(?:[.,]\d{1,2})?\s*$"
+        )
+        selectors = [
+            # Clickable container whose child text looks like a price
+            f'new UiSelector().clickable(true).childSelector(new UiSelector().textMatches("{price_pattern}"))',
+            # Direct clickable text matching price
+            f'new UiSelector().textMatches("{price_pattern}").clickable(true)',
+            # 'Buy' label
+            'new UiSelector().clickable(true).childSelector(new UiSelector().textMatches("(?i)^buy$|^buy for .*"))',
+            'new UiSelector().textMatches("(?i)^buy$|^buy for .*").clickable(true)',
+        ]
+        while time.time() < deadline:
+            if stop_event and stop_event.is_set():
+                return False
+            for selector in selectors:
+                try:
+                    driver.find_element(AppiumBy.ANDROID_UIAUTOMATOR, selector)
+                    return True
+                except NoSuchElementException:
+                    pass
+            time.sleep(1)
+        return False
+
     def _find_done_btn(timeout: int) -> object | None:
         """Finds Open/Uninstall after install completes."""
         deadline = time.time() + timeout
@@ -501,6 +627,34 @@ def download_via_appium(
     # pulled: flat list of all local APK file paths (base + splits)
     pulled: list[str] = []
 
+    def _is_pkg_on_device(pkg: str) -> bool:
+        try:
+            adb = _find_adb()
+            r = subprocess.run(
+                [adb, "-s", serial, "shell", "pm", "path", "--user", "0", pkg],
+                capture_output=True, text=True, timeout=10,
+            )
+            if "package:" in (r.stdout or ""):
+                return True
+            r = subprocess.run(
+                [adb, "-s", serial, "shell", "pm", "path", pkg],
+                capture_output=True, text=True, timeout=10,
+            )
+            return "package:" in (r.stdout or "")
+        except Exception:
+            return False
+
+    def _uninstall_pkg(pkg: str):
+        try:
+            adb = _find_adb()
+            subprocess.run(
+                [adb, "-s", serial, "uninstall", pkg],
+                capture_output=True, timeout=30,
+            )
+            log(f"[{pkg}] Uninstalled.")
+        except Exception as e_uninstall:
+            log(f"[{pkg}] WARNING: Uninstall failed: {e_uninstall}")
+
     try:
         for package in packages:
             if stop_event and stop_event.is_set():
@@ -516,12 +670,24 @@ def download_via_appium(
                 continue
 
             log(f"[{package}] Opening Play Store...")
+            install_attempted = False
+            session_dead = False
             try:
-                driver.execute_script(
-                    "mobile: deepLink",
-                    {"url": f"market://details?id={package}",
-                     "package": _PLAY_STORE_PKG},
-                )
+                try:
+                    driver.execute_script(
+                        "mobile: deepLink",
+                        {"url": f"market://details?id={package}",
+                         "package": _PLAY_STORE_PKG},
+                    )
+                except Exception as e_deep:
+                    msg = str(e_deep).lower()
+                    if "invalidsessionid" in msg or ("session" in msg and "not" in msg):
+                        log(f"[{package}] ERROR: Appium session lost: {e_deep}")
+                        session_dead = True
+                        raise
+                    log(f"[{package}] ERROR: deepLink failed: {e_deep} — skipping.")
+                    _save_skip_entry(output_dir, package, f"deeplink_failed: {e_deep}")
+                    continue
 
                 # Wait for page to settle
                 time.sleep(4)
@@ -537,7 +703,12 @@ def download_via_appium(
                 )
                 if already_on_device:
                     log(f"[{package}] Already installed on device — pulling APKs...")
+                    install_attempted = True
                 else:
+                    if _is_paid_app(timeout=3):
+                        log(f"[{package}] Paid app detected — skipping.")
+                        _save_skip_entry(output_dir, package, "paid")
+                        continue
                     install_btn = _find_install_btn(timeout=15)
                     if stop_event and stop_event.is_set():
                         log("Cancelled.")
@@ -545,10 +716,12 @@ def download_via_appium(
 
                     if not install_btn:
                         log(f"[{package}] WARNING: Could not find Install/Update button — skipping.")
+                        _save_skip_entry(output_dir, package, "install_button_not_found")
                         continue
 
                     log(f"[{package}] Tapping Install...")
                     install_btn.click()
+                    install_attempted = True
                     timeout_min = timeout_sec / 60
                     log(f"[{package}] Waiting for installation (up to {timeout_min:.0f} min)...")
 
@@ -558,36 +731,54 @@ def download_via_appium(
                         break
                     if not done:
                         log(f"[{package}] WARNING: Install timed out — skipping.")
+                        _save_skip_entry(output_dir, package, "install_timeout")
                         continue
                     log(f"[{package}] Installed.")
 
-                # Pull all APKs (base + splits/libs)
-                paths = _pull_apks(serial, package, pkg_dir, on_output)
+                # Pull all APKs (base + splits/libs). Reuse the per-app install
+                # budget so slow devices get the same window to register the pkg.
+                paths = _pull_apks(
+                    serial, package, pkg_dir, on_output,
+                    timeout_sec=timeout_sec, stop_event=stop_event,
+                )
                 if not paths:
                     log(f"[{package}] WARNING: Pull failed — not counting as downloaded.")
+                    _save_skip_entry(output_dir, package, "pull_failed")
                 else:
                     pulled.extend(paths)
                     pulled_packages.append(package)
                     log(f"[{package}] Saved {len(paths)} file(s) to {pkg_dir}")
-
-                # Uninstall from device after pulling to free space
-                log(f"[{package}] Uninstalling from device...")
-                try:
-                    adb = _find_adb()
-                    subprocess.run(
-                        [adb, "-s", serial, "uninstall", package],
-                        capture_output=True, timeout=30,
-                    )
-                    log(f"[{package}] Uninstalled.")
-                except Exception as e_uninstall:
-                    log(f"[{package}] WARNING: Uninstall failed: {e_uninstall}")
 
             except Exception as e:
                 if stop_event and stop_event.is_set():
                     log("Cancelled.")
                     break
                 log(f"[{package}] ERROR: {e}")
-                continue
+                msg = str(e).lower()
+                if "invalidsessionid" in msg or ("session" in msg and "not" in msg):
+                    session_dead = True
+                else:
+                    _save_skip_entry(output_dir, package, f"exception: {e}")
+            finally:
+                # Always attempt uninstall if install was triggered OR pkg is on device,
+                # so partial/failed installs don't accumulate.
+                if install_attempted or _is_pkg_on_device(package):
+                    log(f"[{package}] Cleaning up — uninstalling from device...")
+                    _uninstall_pkg(package)
+
+            if session_dead:
+                log("Recreating Appium session to continue with remaining apps...")
+                try:
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    driver = webdriver.Remote(base_url, options=options)
+                    _active_driver = driver
+                    log("Appium session recreated.")
+                except Exception as e_recreate:
+                    log(f"ERROR: Could not recreate Appium session: {e_recreate} — aborting remaining apps.")
+                    break
 
     finally:
         _active_driver = None

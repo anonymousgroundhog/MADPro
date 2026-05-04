@@ -157,4 +157,94 @@ function clearCache() {
   CACHE.clear();
 }
 
-module.exports = { lookupPlayStore, lookupMany, clearCache };
+/**
+ * Fetch top package IDs in a Play Store category.
+ * Primary: google-play-scraper lib (RPC-backed, supports num up to ~120 per collection).
+ * Iterates multiple collections (TOP_FREE, TOP_PAID, TOP_GROSSING, NEW_FREE, NEW_PAID)
+ * and merges/dedupes to reach N.
+ * Fallback: legacy HTML scrape (capped ~30-50 per category cluster).
+ *
+ * @param {string} catId  e.g. "GAME_ACTION", "SOCIAL"
+ * @param {number} n      target package count
+ * @returns {Promise<string[]>}  list of package IDs (may be < n if Play Store cap hit)
+ */
+async function fetchTopPackages(catId, n) {
+  if (!catId || n <= 0) return [];
+
+  const seen = new Set();
+  const order = [];
+
+  // Primary path: google-play-scraper
+  try {
+    const gplay = require("google-play-scraper").default || require("google-play-scraper");
+    const collections = [
+      gplay.collection.TOP_FREE,
+      gplay.collection.TOP_PAID,
+      gplay.collection.TOP_GROSSING,
+      gplay.collection.NEW_FREE,
+      gplay.collection.NEW_PAID,
+    ].filter(Boolean);
+
+    for (const collection of collections) {
+      if (order.length >= n) break;
+      try {
+        const list = await gplay.list({
+          category: catId,
+          collection,
+          num: Math.min(n, 250),
+          country: "us",
+          lang: "en",
+          fullDetail: false,
+        });
+        for (const app of list) {
+          const pkg = app && app.appId;
+          if (!pkg || !pkg.includes(".")) continue;
+          if (seen.has(pkg)) continue;
+          seen.add(pkg);
+          order.push(pkg);
+          if (order.length >= n) break;
+        }
+      } catch { /* try next collection */ }
+    }
+  } catch { /* lib missing → fallback */ }
+
+  if (order.length >= n) return order.slice(0, n);
+
+  // Fallback: legacy HTML scrape
+  const charts = [
+    "topselling_free",
+    "topselling_paid",
+    "topgrossing",
+    "topselling_new_free",
+    "topselling_new_paid",
+    "movers_shakers",
+  ];
+  const candidateUrls = [
+    `https://play.google.com/store/apps/category/${catId}?hl=en&gl=us`,
+    `https://play.google.com/store/apps/category/${catId}`,
+    ...charts.map(c => `https://play.google.com/store/apps/category/${catId}/collection/${c}?hl=en&gl=us`),
+    ...charts.map(c => `https://play.google.com/store/apps/collection/${c}?hl=en&gl=us`),
+  ];
+
+  for (const url of candidateUrls) {
+    if (order.length >= n) break;
+    let html;
+    try { html = await fetchHtml(url); } catch { continue; }
+    if (!html) continue;
+
+    const re = /\/store\/apps\/details\?id=([a-zA-Z0-9_.]+)/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      const pkg = m[1];
+      if (!pkg.includes(".")) continue;
+      if (seen.has(pkg)) continue;
+      seen.add(pkg);
+      order.push(pkg);
+      if (order.length >= n) break;
+    }
+  }
+
+  return order.slice(0, n);
+}
+
+module.exports = { lookupPlayStore, lookupMany, clearCache, fetchTopPackages };

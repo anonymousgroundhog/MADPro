@@ -819,9 +819,10 @@ function renderHtml() {
         </div>
         <div class="cat-checklist" id="catChecklist"></div>
 
-        <div style="display:flex;gap:8px;margin-top:12px;">
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
           <button class="tools-btn-primary" id="btnStartDownload" onclick="startDownload()">Start Download</button>
           <button class="tools-btn-danger" id="btnCancelDownload" onclick="cancelCurrentJob('download')" disabled>Cancel</button>
+          <button class="tools-btn-sm" id="btnUninstallAll" onclick="uninstallAllSelected()" title="Uninstall all packages from selected categories on the connected device">Uninstall All (Selected Categories)</button>
         </div>
       </div>
     </div>
@@ -2329,7 +2330,7 @@ const CATEGORIES_LIST = [
 ];
 
 let toolsInited = false;
-let currentJobs = { download: null, inject: null, instrument: null };
+let currentJobs = { download: null, inject: null, instrument: null, uninstall: null };
 let toolsBrowseTarget = null;
 
 function initToolsTab() {
@@ -2699,6 +2700,34 @@ async function startDownload() {
     currentJobs.download = null;
     if (err) appendToolsLog('[ERROR] ' + err);
     else appendToolsLog('--- Download complete ---');
+  });
+}
+
+async function uninstallAllSelected() {
+  const categories = [...document.querySelectorAll('.cat-cb:checked')].map(cb => cb.value);
+  if (!categories.length) { appendToolsLog('[WARN] Select at least one category to uninstall from.'); return; }
+  const count = parseInt(document.getElementById('dlCount').value) || 100;
+  const deviceSerial = document.getElementById('deviceSelect')?.value || null;
+  if (!deviceSerial) {
+    appendToolsLog('[ERROR] Uninstall requires a connected device. Connect a device or emulator first.');
+    return;
+  }
+  if (!confirm('Uninstall up to ' + count + ' app(s) per category from device ' + deviceSerial + '?\\nCategories: ' + categories.join(', '))) return;
+
+  document.getElementById('btnUninstallAll').disabled = true;
+  appendToolsLog('--- Starting bulk uninstall: ' + categories.length + ' categor(ies), up to ' + count + ' apps each ---');
+  const r = await api('/api/tools/uninstall-all', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ categories, count, deviceSerial }) });
+  if (r.error) {
+    appendToolsLog('[ERROR] ' + r.error);
+    document.getElementById('btnUninstallAll').disabled = false;
+    return;
+  }
+  currentJobs.uninstall = r.jobId;
+  streamJob(r.jobId, err => {
+    document.getElementById('btnUninstallAll').disabled = false;
+    currentJobs.uninstall = null;
+    if (err) appendToolsLog('[ERROR] ' + err);
+    else appendToolsLog('--- Uninstall complete ---');
   });
 }
 
@@ -6345,6 +6374,16 @@ except Exception as e:
     if (!p.apkDir) return jsonResponse(res, { error: "Missing apkDir" }, 400);
     if (!fs.existsSync(p.apkDir)) return jsonResponse(res, { error: "Directory not found: " + p.apkDir }, 400);
     const jobId = toolsApi.startInstrumentation({ apkDir: p.apkDir, logDir: p.logDir || null, deviceSerial: p.deviceSerial || null });
+    return jsonResponse(res, { jobId });
+  }
+
+  // POST /api/tools/uninstall-all  { categories, count, deviceSerial }
+  if (req.method === "POST" && pathname === "/api/tools/uninstall-all") {
+    const body = await readBody(req);
+    let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
+    if (!p.categories?.length) return jsonResponse(res, { error: "No categories" }, 400);
+    if (!p.deviceSerial) return jsonResponse(res, { error: "deviceSerial required" }, 400);
+    const jobId = toolsApi.startUninstallAll({ categories: p.categories, count: p.count || 100, deviceSerial: p.deviceSerial });
     return jsonResponse(res, { jobId });
   }
 

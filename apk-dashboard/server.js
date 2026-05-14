@@ -823,6 +823,7 @@ function renderHtml() {
           <button class="tools-btn-primary" id="btnStartDownload" onclick="startDownload()">Start Download</button>
           <button class="tools-btn-danger" id="btnCancelDownload" onclick="cancelCurrentJob('download')" disabled>Cancel</button>
           <button class="tools-btn-sm" id="btnUninstallAll" onclick="uninstallAllSelected()" title="Uninstall all packages from selected categories on the connected device">Uninstall All (Selected Categories)</button>
+          <button class="tools-btn-sm" id="btnClearFailed" onclick="clearFailedApps()" style="display:none;" title="Delete the .skip_list.json file so previously-failed Google Play downloads will be retried">Clear Failed (Google Play)</button>
         </div>
       </div>
     </div>
@@ -2631,6 +2632,7 @@ function onBackendChange(radio) {
   const catChecklist = document.getElementById('catChecklist');
   const dlCountInput = document.getElementById('dlCount');
 
+  const btnClearFailed = document.getElementById('btnClearFailed');
   if (radio.value === 'google-play') {
     warn.textContent = 'Uses Appium to automate the Play Store on your connected device. Device must be signed in to a Google account.';
     warn.style.display = 'block';
@@ -2640,6 +2642,7 @@ function onBackendChange(radio) {
     catButtons.style.display = 'flex';
     catChecklist.style.display = 'block';
     dlCountInput.style.display = 'block';
+    if (btnClearFailed) btnClearFailed.style.display = 'inline-block';
   } else if (radio.value === 'androzoo') {
     warn.textContent = '';
     warn.style.display = 'none';
@@ -2648,6 +2651,7 @@ function onBackendChange(radio) {
     catButtons.style.display = 'none';
     catChecklist.style.display = 'none';
     dlCountInput.style.display = 'none';
+    if (btnClearFailed) btnClearFailed.style.display = 'none';
   } else {
     warn.textContent = '';
     warn.style.display = 'none';
@@ -2656,6 +2660,7 @@ function onBackendChange(radio) {
     catButtons.style.display = 'flex';
     catChecklist.style.display = 'block';
     dlCountInput.style.display = 'block';
+    if (btnClearFailed) btnClearFailed.style.display = 'none';
   }
 }
 
@@ -2701,6 +2706,25 @@ async function startDownload() {
     if (err) appendToolsLog('[ERROR] ' + err);
     else appendToolsLog('--- Download complete ---');
   });
+}
+
+async function clearFailedApps() {
+  const outputDir = document.getElementById('dlOutputDir').value.trim() || document.getElementById('dlOutputDir').placeholder;
+  appendToolsLog('--- Clearing Google Play failed/skip list from: ' + outputDir + ' ---');
+  try {
+    const r = await api('/api/tools/clear-failed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outputDir }),
+    });
+    if (r.cleared !== undefined) {
+      appendToolsLog('[OK] Cleared ' + r.cleared + ' skip list file(s). Failed apps will be retried on next download.');
+    } else {
+      appendToolsLog('[WARN] ' + (r.message || JSON.stringify(r)));
+    }
+  } catch (e) {
+    appendToolsLog('[ERROR] Clear failed: ' + e.message);
+  }
 }
 
 async function uninstallAllSelected() {
@@ -6346,6 +6370,37 @@ except Exception as e:
       const jobId = toolsApi.startDownload({ categories: p.categories, count: p.count || 10, outputDir: p.outputDir, backend: p.backend || "apkpure", deviceSerial: p.deviceSerial || null, timeoutMs: p.timeoutMs || 0 });
       return jsonResponse(res, { jobId });
     }
+  }
+
+  // POST /api/tools/clear-failed  { outputDir }
+  // Deletes .skip_list.json from outputDir and all google_play category subdirectories
+  if (req.method === "POST" && pathname === "/api/tools/clear-failed") {
+    const body = await readBody(req);
+    let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
+    if (!p.outputDir) return jsonResponse(res, { error: "Missing outputDir" }, 400);
+    const resolvedOut = path.resolve(p.outputDir.replace(/^~/, os.homedir()));
+    let cleared = 0;
+    const SKIP_FILENAME = ".skip_list.json";
+    function deleteSkipList(dir) {
+      const target = path.join(dir, SKIP_FILENAME);
+      if (fs.existsSync(target)) { fs.unlinkSync(target); cleared++; }
+    }
+    // Root outputDir
+    deleteSkipList(resolvedOut);
+    // Walk one level of category dirs, then into google_play subdirs
+    if (fs.existsSync(resolvedOut)) {
+      for (const cat of fs.readdirSync(resolvedOut, { withFileTypes: true })) {
+        if (!cat.isDirectory()) continue;
+        const gpDir = path.join(resolvedOut, cat.name, "google_play");
+        if (fs.existsSync(gpDir)) {
+          deleteSkipList(gpDir);
+          for (const pkg of fs.readdirSync(gpDir, { withFileTypes: true })) {
+            if (pkg.isDirectory()) deleteSkipList(path.join(gpDir, pkg.name));
+          }
+        }
+      }
+    }
+    return jsonResponse(res, { cleared });
   }
 
   // POST /api/tools/inject  { apkDir, patterns, outputDir, injectAll }

@@ -694,6 +694,7 @@ function renderHtml() {
 <div class="toolbar">
   <input type="text" id="searchInput" placeholder="Search by app name or package…" oninput="renderBoard()" />
   <button class="btn-export" id="btnExport" onclick="openExport()">⬇ Export PDF</button>
+  <button class="btn-export" id="btnExportCsv" onclick="exportCsv()">⬇ Export CSV</button>
 </div>
 
 <!-- ── Tab navigation ── -->
@@ -2284,6 +2285,29 @@ async function doExport() {
   } catch (err) {
     statusEl.style.color = 'var(--accent-ads)';
     statusEl.textContent = 'Error: ' + err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Export CSV ───────────────────────────────────────────────────────────────
+
+async function exportCsv() {
+  const btn = document.getElementById('btnExportCsv');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/export-csv', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'CSV export failed'); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const now = new Date();
+    const stamp = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
+    a.href = url; a.download = 'apk-dashboard-' + stamp + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert('CSV export failed: ' + err.message);
   } finally {
     btn.disabled = false;
   }
@@ -6288,6 +6312,55 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       return jsonResponse(res, { error: err.message }, 500);
     }
+  }
+
+  // POST /api/export-csv — returns CSV of all enriched apps
+  if (req.method === "POST" && pathname === "/api/export-csv") {
+    const cols = [
+      "package", "appName", "label", "versionName", "versionCode",
+      "primaryApk", "storeAppName", "rating", "downloads", "hasAds",
+      "adSdks", "category", "storeUrl", "stillOnStore", "scanMethod",
+    ];
+
+    function csvCell(v) {
+      if (v === null || v === undefined) return "";
+      const s = Array.isArray(v) ? v.join("; ") : String(v);
+      if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+        return '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    }
+
+    const rows = [cols.join(",")];
+    for (const app of state.apps) {
+      const sd = app.storeData || {};
+      rows.push([
+        app.package,
+        app.appName,
+        app.label,
+        app.versionName,
+        app.versionCode,
+        app.primaryApk,
+        sd.appName,
+        sd.rating,
+        sd.downloads,
+        sd.hasAds === true ? "true" : sd.hasAds === false ? "false" : "",
+        sd.adSdks,
+        sd.category,
+        sd.storeUrl,
+        sd.stillOnStore === true ? "true" : sd.stillOnStore === false ? "false" : "",
+        sd.scanMethod,
+      ].map(csvCell).join(","));
+    }
+
+    const csv = rows.join("\n");
+    const buf = Buffer.from(csv, "utf8");
+    res.writeHead(200, {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="apk-dashboard.csv"',
+      "Content-Length": buf.length,
+    });
+    return res.end(buf);
   }
 
   // GET /api/tools/status — tool availability + device list

@@ -533,30 +533,49 @@ function _startGPlayDownload(job, { categories, count, outputDir, deviceSerial, 
       return finishJob(job, "bridge script missing");
     }
 
-    // Collect all packages across categories
+    // Collect all packages across categories; track shortfall for Appium category browse
     const allByCategory = [];
     for (const catId of categories) {
       const packages = await resolveCategoryPackages(catId, count, job);
-      if (packages.length) allByCategory.push({ catId, packages });
+      const shortfall = count - packages.length;
+      allByCategory.push({ catId, packages, shortfall });
     }
 
-    if (!allByCategory.length) {
+    const hasWork = allByCategory.some(c => c.packages.length > 0 || c.shortfall > 0);
+    if (!hasWork) {
       pushLine(job, "[WARN] No packages found for selected categories.");
       return finishJob(job);
     }
 
-    for (const { catId, packages } of allByCategory) {
+    for (const { catId, packages, shortfall } of allByCategory) {
       if (job.cancelled) break;
-      pushLine(job, `--- Category: ${catId} (${packages.length} app(s)) via Play Store ---`);
       const catDir = path.join(outputDir, catId, "google_play");
       fs.mkdirSync(catDir, { recursive: true });
-
       const timeoutSec = timeoutMs > 0 ? Math.floor(timeoutMs / 1000) : 0;
-      const args = [bridgeScript, deviceSerial || "", catDir, timeoutSec, ...packages];
-      // timeoutMs from UI = per-app cap, enforced inside python loop via timeoutSec arg.
-      // Parent process timeout disabled — otherwise one slow app kills entire batch.
-      const ok = await runProcess(job, pythonBin, args, { timeoutMs: 0 });
-      if (!ok && !job.cancelled) pushLine(job, `[WARN] Some downloads may have failed for ${catId}`);
+
+      // Phase 1: download known packages
+      if (packages.length > 0) {
+        pushLine(job, `--- Category: ${catId} (${packages.length} app(s)) via Play Store ---`);
+        const args = [bridgeScript, deviceSerial || "", catDir, timeoutSec, ...packages];
+        const ok = await runProcess(job, pythonBin, args, { timeoutMs: 0 });
+        if (!ok && !job.cancelled) pushLine(job, `[WARN] Some downloads may have failed for ${catId}`);
+      }
+
+      // Phase 2: if scrape fell short of requested count, browse category via Appium
+      if (!job.cancelled && shortfall > 0) {
+        pushLine(job, `[WARN] BUSINESS: only ${packages.length}/${count} package(s) available — Play Store category pages cap visible apps without authenticated API access.`);
+        pushLine(job, `[INFO] ${catId}: switching to Appium category-browse mode to collect ${shortfall} more app(s)...`);
+        const args = [
+          bridgeScript,
+          "--browse-category", catId,
+          "--count", String(shortfall),
+          deviceSerial || "",
+          catDir,
+          String(timeoutSec),
+        ];
+        const ok = await runProcess(job, pythonBin, args, { timeoutMs: 0 });
+        if (!ok && !job.cancelled) pushLine(job, `[WARN] Category-browse mode failed or partially succeeded for ${catId}`);
+      }
     }
 
     // Process downloaded files: extract XAPKs and normalize APK names

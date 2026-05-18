@@ -10,7 +10,26 @@
       "Read(//home/spsand1/.claude/plugins/cache/caveman/caveman/63e797cd753b/**)",
       "Bash(python3 -m scripts.caveman-compress \"/home/spsand1/Documents/Projects/MADPro/apk-dashboard/CLAUDE.md\")",
       "Bash(python3 scripts/__main__.py \"/home/spsand1/Documents/Projects/MADPro/apk-dashboard/CLAUDE.md\")",
-      "Bash(python3 -m scripts /home/spsand1/Documents/Projects/MADPro/apk-dashboard/CLAUDE.md)"
+      "Bash(python3 -m scripts /home/spsand1/Documents/Projects/MADPro/apk-dashboard/CLAUDE.md)",
+      "Read(//home/sean/Documents/Projects/MADPro/**)",
+      "Read(//home/sean/Documents/Projects/MADPro/core/**)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('core/appium_downloader.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(python3 *)",
+      "Bash(adb devices *)",
+      "Bash(adb -s ZT4229DSNS shell am start -n com.android.vending/.AssetBrowserActivity)",
+      "Bash(adb -s ZT4229DSNS shell uiautomator dump /sdcard/ui.xml)",
+      "Bash(adb -s ZT4229DSNS pull /sdcard/ui.xml /tmp/playstore_ui.xml)",
+      "Bash(adb -s ZT4229DSNS shell dumpsys activity top)",
+      "Bash(adb -s ZT4229DSNS shell am start -a android.intent.action.VIEW -d \"market://details?id=com.atlassian.android.jira.core\" com.android.vending)",
+      "Bash(adb -s ZT4229DSNS shell dumpsys activity activities)",
+      "Bash(adb -s ZT4229DSNS shell uiautomator dump /sdcard/ui2.xml)",
+      "Bash(adb -s ZT4229DSNS pull /sdcard/ui2.xml /tmp/playstore_detail.xml)",
+      "Bash(adb -s ZT4229DSNS shell uiautomator dump /sdcard/ui3.xml)",
+      "Bash(adb -s ZT4229DSNS pull /sdcard/ui3.xml /tmp/ps_installed.xml)",
+      "Bash(adb -s ZT4229DSNS pull /sdcard/ui3.xml /tmp/ps_detail.xml)",
+      "Bash(adb -s ZT4229DSNS shell am start -a android.intent.action.VIEW -d \"market://search?q=&c=apps&cat=BUSINESS\" com.android.vending)",
+      "Bash(adb -s ZT4229DSNS shell uiautomator dump /sdcard/ui_cat.xml)",
+      "Bash(adb -s ZT4229DSNS pull /sdcard/ui_cat.xml /tmp/ui_cat.xml)"
     ]
   }
 }

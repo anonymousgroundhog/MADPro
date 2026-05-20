@@ -824,6 +824,7 @@ function renderHtml() {
           <button class="tools-btn-primary" id="btnStartDownload" onclick="startDownload()">Start Download</button>
           <button class="tools-btn-danger" id="btnCancelDownload" onclick="cancelCurrentJob('download')" disabled>Cancel</button>
           <button class="tools-btn-sm" id="btnUninstallAll" onclick="uninstallAllSelected()" title="Uninstall all packages from selected categories on the connected device">Uninstall All (Selected Categories)</button>
+          <button class="tools-btn-sm" id="btnUninstallSubdirs" onclick="uninstallSubdirPackages()" title="Uninstall all apps installed via the Play Store (installer=com.android.vending) on the connected device">Uninstall apps using adb</button>
           <button class="tools-btn-sm" id="btnClearFailed" onclick="clearFailedApps()" style="display:none;" title="Delete the .skip_list.json file so previously-failed Google Play downloads will be retried">Clear Failed (Google Play)</button>
         </div>
       </div>
@@ -2774,6 +2775,31 @@ async function uninstallAllSelected() {
   streamJob(r.jobId, err => {
     document.getElementById('btnUninstallAll').disabled = false;
     currentJobs.uninstall = null;
+    if (err) appendToolsLog('[ERROR] ' + err);
+    else appendToolsLog('--- Uninstall complete ---');
+  });
+}
+
+async function uninstallSubdirPackages() {
+  const deviceSerial = document.getElementById('deviceSelect')?.value || null;
+  if (!deviceSerial) {
+    appendToolsLog('[ERROR] Uninstall requires a connected device. Connect a device or emulator first.');
+    return;
+  }
+  if (!confirm('Uninstall all Play Store-installed apps (installer=com.android.vending) on device ' + deviceSerial + '?')) return;
+
+  document.getElementById('btnUninstallSubdirs').disabled = true;
+  appendToolsLog('--- Uninstalling Play Store apps from device: ' + deviceSerial + ' ---');
+  const r = await api('/api/tools/uninstall-subdirs', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ deviceSerial }) });
+  if (r.error) {
+    appendToolsLog('[ERROR] ' + r.error);
+    document.getElementById('btnUninstallSubdirs').disabled = false;
+    return;
+  }
+  currentJobs.uninstallSubdirs = r.jobId;
+  streamJob(r.jobId, err => {
+    document.getElementById('btnUninstallSubdirs').disabled = false;
+    currentJobs.uninstallSubdirs = null;
     if (err) appendToolsLog('[ERROR] ' + err);
     else appendToolsLog('--- Uninstall complete ---');
   });
@@ -6512,6 +6538,15 @@ except Exception as e:
     if (!p.categories?.length) return jsonResponse(res, { error: "No categories" }, 400);
     if (!p.deviceSerial) return jsonResponse(res, { error: "deviceSerial required" }, 400);
     const jobId = toolsApi.startUninstallAll({ categories: p.categories, count: p.count || 100, deviceSerial: p.deviceSerial });
+    return jsonResponse(res, { jobId });
+  }
+
+  // POST /api/tools/uninstall-subdirs  { deviceSerial }
+  if (req.method === "POST" && pathname === "/api/tools/uninstall-subdirs") {
+    const body = await readBody(req);
+    let p; try { p = JSON.parse(body); } catch { return jsonResponse(res, { error: "Bad JSON" }, 400); }
+    if (!p.deviceSerial) return jsonResponse(res, { error: "deviceSerial required" }, 400);
+    const jobId = toolsApi.startUninstallSubdirs({ deviceSerial: p.deviceSerial });
     return jsonResponse(res, { jobId });
   }
 

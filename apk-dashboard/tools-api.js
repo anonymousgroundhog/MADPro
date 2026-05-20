@@ -750,13 +750,12 @@ function startInjection({ apkDir, patterns, outputDir, injectAll }) {
       const filterCsv = patterns.join(",");
 
       const javaArgs = [
-        "-Xmx6g",                          // Reduced heap to avoid GC pauses
-        "-Xms2g",                          // Min heap for faster startup
-        "-XX:+UseG1GC",                    // G1 garbage collector
-        "-XX:MaxGCPauseMillis=200",        // Limit GC pause time
-        "-XX:+PrintGCDetails",             // Log GC for debugging
-        "-XX:SoftRefLRUPolicyMSPerMB=0",   // Aggressive soft ref clearing
-        "-XX:StringTableSize=1000003",     // Optimize string table
+        "-Xmx4g",
+        "-Xms512m",
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=200",
+        "-XX:SoftRefLRUPolicyMSPerMB=0",
+        "-XX:StringTableSize=1000003",
         "-cp", cp,
         "LogInjector",
       ];
@@ -1130,6 +1129,60 @@ function startUninstallAll({ categories, count, deviceSerial }) {
   return job.id;
 }
 
+// ── Uninstall all Play Store-installed apps via adb ───────────────────────────
+//
+// Runs: adb shell pm list packages -i | grep 'installer=com.android.vending'
+// Parses package names, then uninstalls each one.
+function startUninstallSubdirs({ deviceSerial }) {
+  const job = createJob();
+
+  (async () => {
+    const adb = findAdb() || "adb";
+    const s = deviceSerial ? ["-s", deviceSerial] : [];
+
+    pushLine(job, `[INFO] Querying Play Store-installed packages on device ${deviceSerial || "(default)"}...`);
+
+    const list = spawnSync(adb, [...s, "shell", "pm", "list", "packages", "-i"], { encoding: "utf8", timeout: 30000 });
+    if (list.error) {
+      pushLine(job, `[ERROR] adb failed: ${list.error.message}`);
+      return finishJob(job, list.error.message);
+    }
+
+    const pkgs = [];
+    for (const line of (list.stdout || "").split("\n")) {
+      if (!line.includes("installer=com.android.vending")) continue;
+      const m = line.match(/^package:(\S+)/);
+      if (m) pkgs.push(m[1]);
+    }
+
+    if (!pkgs.length) {
+      pushLine(job, "[WARN] No Play Store-installed packages found on device.");
+      return finishJob(job);
+    }
+
+    pushLine(job, `[INFO] Found ${pkgs.length} Play Store package(s). Uninstalling...`);
+
+    let removed = 0, failed = 0;
+    for (const pkg of pkgs) {
+      if (job.cancelled) break;
+      const r = spawnSync(adb, [...s, "uninstall", pkg], { encoding: "utf8", timeout: 30000 });
+      const out = (r.stdout || "") + (r.stderr || "");
+      if (/^Success/i.test(out.trim())) {
+        pushLine(job, `[OK] Uninstalled ${pkg}`);
+        removed++;
+      } else {
+        pushLine(job, `[FAIL] ${pkg}: ${out.trim() || "exit " + r.status}`);
+        failed++;
+      }
+    }
+
+    pushLine(job, `[DONE] removed=${removed} failed=${failed} of ${pkgs.length}`);
+    finishJob(job);
+  })().catch(err => finishJob(job, err.message));
+
+  return job.id;
+}
+
 module.exports = {
   checkTools,
   listAdbDevices,
@@ -1139,6 +1192,7 @@ module.exports = {
   startCompile,
   startInstrumentation,
   startUninstallAll,
+  startUninstallSubdirs,
   cancelJob,
   getJob: (id) => jobs.get(id),
 };

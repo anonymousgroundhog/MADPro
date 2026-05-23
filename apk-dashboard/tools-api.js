@@ -212,11 +212,15 @@ function runProcess(job, cmd, args, opts = {}) {
       lines.forEach(l => { if (l.trim()) pushLine(job, l.trim()); });
     };
 
+    const SOOT_NOISE_RE = /TypePromotionUseVisitor|Failed Typing in|GC\(\d+\)|gc,start|gc,task|gc,phases|gc,heap|gc,metaspace|gc,cpu|Pause Young|Pause Full|Evacuation Pause|Using \d+ workers/;
+
     const onStderr = d => {
       stderrBuf += d.toString();
       const lines = stderrBuf.split("\n");
       stderrBuf = lines.pop();
-      lines.forEach(l => { if (l.trim()) pushLine(job, "[ERR] " + l.trim()); });
+      lines.forEach(l => {
+        if (l.trim() && !SOOT_NOISE_RE.test(l)) pushLine(job, "[ERR] " + l.trim());
+      });
     };
 
     proc.stdout?.on("data", onStdout);
@@ -224,12 +228,28 @@ function runProcess(job, cmd, args, opts = {}) {
 
     let killTimer = null;
     let progressTimer = null;
+    let stuckTimer = null;
+    let lastLineCount = job.lines.length;
 
     if (opts.timeoutMs > 0) {
       killTimer = setTimeout(() => {
         pushLine(job, `[TIMEOUT] Process killed after ${opts.timeoutMs}ms`);
         try { proc.kill("SIGTERM"); } catch {}
+        setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 5000);
       }, opts.timeoutMs);
+    }
+
+    if (opts.stuckTimeoutMs > 0) {
+      stuckTimer = setInterval(() => {
+        if (job.lines.length === lastLineCount) {
+          pushLine(job, `[TIMEOUT] No output for ${opts.stuckTimeoutMs / 1000}s — killing stuck process`);
+          clearInterval(stuckTimer);
+          stuckTimer = null;
+          try { proc.kill("SIGTERM"); } catch {}
+          setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 5000);
+        }
+        lastLineCount = job.lines.length;
+      }, opts.stuckTimeoutMs);
     }
 
     // Progress ping: send keepalive every 45s if no output
@@ -243,6 +263,7 @@ function runProcess(job, cmd, args, opts = {}) {
     proc.on("close", code => {
       clearInterval(progressTimer);
       if (killTimer) clearTimeout(killTimer);
+      if (stuckTimer) clearInterval(stuckTimer);
       stdoutBuf = flushBuf(stdoutBuf, '');
       stderrBuf = flushBuf(stderrBuf, '[ERR] ');
       job._proc = null;
@@ -251,6 +272,7 @@ function runProcess(job, cmd, args, opts = {}) {
     proc.on("error", err => {
       clearInterval(progressTimer);
       if (killTimer) clearTimeout(killTimer);
+      if (stuckTimer) clearInterval(stuckTimer);
       pushLine(job, `ERROR: ${err.message}`);
       job._proc = null;
       resolve(false);
@@ -767,7 +789,9 @@ function startInjection({ apkDir, patterns, outputDir, injectAll }) {
 
       const javaBin = findBin("java") || "java";
       pushLine(job, `    Cmd: ${javaBin} ${javaArgs.join(" ")}`);
-      const ok = await runProcess(job, javaBin, javaArgs);
+      const perApkTimeoutMs = 10 * 60 * 1000; // 10 min hard cap per APK
+      const stuckTimeoutMs  =  2 * 60 * 1000; // 2 min no-output watchdog
+      const ok = await runProcess(job, javaBin, javaArgs, { timeoutMs: perApkTimeoutMs, stuckTimeoutMs });
 
       if (ok) {
         pushLine(job, `[OK] ${target.label} — output in ${appOutDir}`);

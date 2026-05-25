@@ -16,7 +16,9 @@ const SOOT_NOISE_RE = /TypePromotionUseVisitor|Failed Typing in|GC\(\d+\)|gc,sta
  *   timeoutMs  number  — hard wall-clock kill (0 = none)
  *   stuckMs    number  — kill if no output for N ms (0 = none)
  *   filterSoot boolean — suppress Soot GC noise on stderr
+ *   filterRe   RegExp  — suppress lines matching this regex on stderr
  *   prefix     string  — prefix for stderr lines (default "[ERR]")
+ *   quiet      boolean — suppress all stdout and stderr output
  */
 function run(cmd, args, opts = {}) {
   return new Promise(resolve => {
@@ -32,21 +34,30 @@ function run(cmd, args, opts = {}) {
       return "";
     };
 
+    // Split on \n but also strip embedded \r from progress-style output
+    function splitLines(buf) {
+      const lines = buf.split("\n");
+      const remainder = lines.pop();
+      return { lines: lines.map(l => l.replace(/\r/g, "").trim()).filter(Boolean), remainder };
+    }
+
     proc.stdout.on("data", d => {
+      if (opts.quiet) return;
       stdoutBuf += d.toString();
-      const lines = stdoutBuf.split("\n");
-      stdoutBuf = lines.pop();
-      lines.forEach(l => { if (l.trim()) console.log(l.trim()); });
+      const { lines, remainder } = splitLines(stdoutBuf);
+      stdoutBuf = remainder;
+      lines.forEach(l => console.log(l));
     });
 
     proc.stderr.on("data", d => {
       stderrBuf += d.toString();
-      const lines = stderrBuf.split("\n");
-      stderrBuf = lines.pop();
+      if (opts.quiet) return;
+      const { lines, remainder } = splitLines(stderrBuf);
+      stderrBuf = remainder;
       lines.forEach(l => {
-        if (!l.trim()) return;
         if (opts.filterSoot && SOOT_NOISE_RE.test(l)) return;
-        console.error((opts.prefix || "[ERR]") + " " + l.trim());
+        if (opts.filterRe && opts.filterRe.test(l)) return;
+        console.error((opts.prefix || "[ERR]") + " " + l);
       });
     });
 
@@ -76,8 +87,10 @@ function run(cmd, args, opts = {}) {
     proc.on("close", code => {
       if (killTimer) clearTimeout(killTimer);
       if (stuckTimer) clearInterval(stuckTimer);
-      flush(stdoutBuf, "");
-      flush(stderrBuf, opts.prefix || "[ERR]");
+      if (!opts.quiet) {
+        flush(stdoutBuf, "");
+        flush(stderrBuf, opts.prefix || "[ERR]");
+      }
       resolve(code === 0);
     });
 

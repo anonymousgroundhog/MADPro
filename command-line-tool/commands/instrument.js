@@ -10,28 +10,6 @@ const { spawn, spawnSync } = require("child_process");
 const { findAdb } = require("../lib/tools");
 const { run } = require("../lib/runner");
 
-const DANGEROUS_PERMISSIONS = [
-  "android.permission.CAMERA",
-  "android.permission.READ_CONTACTS",
-  "android.permission.WRITE_CONTACTS",
-  "android.permission.READ_CALENDAR",
-  "android.permission.WRITE_CALENDAR",
-  "android.permission.READ_CALL_LOG",
-  "android.permission.WRITE_CALL_LOG",
-  "android.permission.READ_EXTERNAL_STORAGE",
-  "android.permission.WRITE_EXTERNAL_STORAGE",
-  "android.permission.ACCESS_FINE_LOCATION",
-  "android.permission.ACCESS_COARSE_LOCATION",
-  "android.permission.ACCESS_BACKGROUND_LOCATION",
-  "android.permission.RECORD_AUDIO",
-  "android.permission.READ_PHONE_STATE",
-  "android.permission.CALL_PHONE",
-  "android.permission.READ_SMS",
-  "android.permission.SEND_SMS",
-  "android.permission.RECEIVE_SMS",
-  "android.permission.BODY_SENSORS",
-  "android.permission.ACCESS_WIFI_STATE",
-];
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -81,11 +59,14 @@ function register(program) {
     .option("-l, --log-dir <dir>", "Where to save logcat files", path.join(os.homedir(), "MADPro_Logcat"))
     .option("-d, --device <serial>", "ADB device serial")
     .option("--duration <ms>", "Logcat capture duration per app in ms", "30000")
+    .option("--limit <n>", "Only process the first N app bundles (0 = all)", "0")
     .action(async (apkDir, opts) => {
       const adb = findAdb() || "adb";
       const serialArgs = opts.device ? ["-s", opts.device] : [];
       const logDir = path.resolve(opts.logDir.replace(/^~/, os.homedir()));
       const durationMs = parseInt(opts.duration, 10);
+      const limit = parseInt(opts.limit, 10) || 0;
+      const ADB_INSTALL_NOISE = /All files should be loaded|Performing Incremental Install|Serving\.\.\.|Install command complete/;
 
       fs.mkdirSync(logDir, { recursive: true });
       console.log(`[INFO] Logcat output: ${logDir}`);
@@ -105,6 +86,7 @@ function register(program) {
         console.log("[WARN] No subdirectories found.");
         return;
       }
+      if (limit > 0) subdirs = subdirs.slice(0, limit);
       console.log(`[INFO] Found ${subdirs.length} app bundle(s).`);
 
       for (const bundleDir of subdirs) {
@@ -157,28 +139,24 @@ function register(program) {
           }
         }
 
-        // Install
+        // Clear logcat buffer before each app so logs don't bleed across runs
+        spawnSync(adb, [...serialArgs, "logcat", "-c"], { timeout: 5000 });
+
+        // Install with -g to auto-grant all runtime permissions at install time
         let installed;
         if (apks.length > 1) {
           console.log(`[INFO] adb install-multiple (${apks.length} APKs)`);
-          installed = await run(adb, [...serialArgs, "install-multiple", "-r", "-t", ...apks]);
+          installed = await run(adb, [...serialArgs, "install-multiple", "-r", "-t", "-g", "-i", "com.android.vending", ...apks], { filterRe: ADB_INSTALL_NOISE });
         } else {
-          installed = await run(adb, [...serialArgs, "install", "-r", "-t", baseApk]);
+          installed = await run(adb, [...serialArgs, "install", "-r", "-t", "-g", "-i", "com.android.vending", baseApk], { filterRe: ADB_INSTALL_NOISE });
         }
 
         if (!installed) { console.log(`[FAILED] Install failed for ${bundleName} — skipping.`); continue; }
-        console.log(`[OK] Installed ${bundleName}`);
-
-        // Grant permissions
-        console.log(`[INFO] Granting permissions for ${pkg}`);
-        for (const perm of DANGEROUS_PERMISSIONS) {
-          await run(adb, [...serialArgs, "shell", "pm", "grant", pkg, perm]);
-        }
-        console.log("[OK] Permissions granted");
+        console.log(`[OK] Installed ${bundleName} (all runtime permissions granted)`);
 
         // Launch
         console.log(`[INFO] Launching ${pkg}`);
-        await run(adb, [...serialArgs, "shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"]);
+        await run(adb, [...serialArgs, "shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"], { quiet: true });
 
         await sleep(1500);
 

@@ -138,19 +138,36 @@ public class LogInjector {
         // Single-threaded: avoids ConcurrentModificationException on Chain<Unit>
         Options.v().set_num_threads(1);
 
-        // Exclude Android/Java framework and common library packages from body loading.
-        // Soot still resolves their signatures (phantom refs) but won't JImplify them,
-        // which is the main source of heap exhaustion on large APKs.
-        // Skip exclusions if --inject-all flag set.
+        // Always exclude these packages from body loading regardless of --inject-all.
+        // Soot's DEX backend corrupts <clinit> methods in enum/protobuf classes during
+        // rewrite — ART's verifier then rejects them with VerifyError ("Uninitialized
+        // Reference ... but expected Reference java.lang.Object"). Excluding these
+        // packages prevents Soot from touching their bytecode at all.
+        List<String> excludes = new ArrayList<>(Arrays.asList(
+            // Java / Android runtime — never instrument
+            "java.", "javax.", "sun.", "dalvik.",
+            "android.", "com.android.", "androidx.",
+            // Kotlin runtime — enum <clinit> corruption
+            "kotlin.", "kotlinx.",
+            // Protobuf — GeneratedMessageLite$MethodToInvoke <clinit> corruption
+            "com.google.protobuf.",
+            "androidx.datastore.preferences.protobuf.",
+            // Firebase / GMS — RegistrationStatus, RemoteSettings enum corruption
+            "com.google.firebase.",
+            "com.google.android.gms.",
+            "com.google.android.",
+            // Common third-party libs with known enum <clinit> issues
+            "com.google.android.datatransport.",
+            "ch.qos.logback.",
+            "org.apache.", "org.xml.", "org.json.", "org.w3c.",
+            "junit."
+        ));
+        Options.v().set_exclude(excludes);
+
+        // In default (non-inject-all) mode also exclude broader framework packages
+        // to further reduce heap use and body-loading time.
         if (!injectAll) {
-            List<String> excludes = new ArrayList<>(Arrays.asList(
-                "java.", "javax.", "sun.", "android.", "androidx.",
-                "com.google.android.", "com.android.",
-                "kotlin.", "kotlinx.",
-                "org.apache.", "org.xml.", "org.json.", "org.w3c.",
-                "junit.", "dalvik."
-            ));
-            Options.v().set_exclude(excludes);
+            excludes.add("com.google.");
         }
 
         List<String> processDirs = new ArrayList<>();

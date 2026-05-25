@@ -117,7 +117,28 @@
       "Bash(mkdir -p \"/tmp/My Passport/test\")",
       "Bash(echo \"dummy\")",
       "Bash(java -cp java:jar_libs/commons-io-2.6.jar:jar_libs/polyglot-2006.jar:jar_libs/soot-4.4.0-20220321.130129-1-jar-with-dependencies.jar LogInjector --inject-all /home/sean/Android/Sdk/platforms '/tmp/My Passport/test/base.apk' '/tmp/My Passport/output/dir')",
-      "Bash(jar tf *)"
+      "Bash(jar tf *)",
+      "Bash(avdmanager list *)",
+      "Bash(/home/sean/Android/Sdk/emulator/emulator *)",
+      "Bash(/home/sean/Android/Sdk/cmdline-tools/latest/bin/avdmanager create *)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(echo \"PID: $!\")",
+      "Bash(pkill -f \"emulator.*Research_36\")",
+      "Bash(/home/sean/Android/Sdk/platform-tools/adb shell *)",
+      "Bash(/home/sean/Android/Sdk/platform-tools/adb emu *)",
+      "Bash(kill 458435)",
+      "Bash(kill 457338)",
+      "Bash(pkill -f \"emulator.*Research\")",
+      "Bash(/home/sean/Android/Sdk/platform-tools/adb devices *)",
+      "Bash(/home/sean/Android/Sdk/platform-tools/adb -s emulator-5554 shell screencap -p)",
+      "Bash(pkill -f \"node.*index.js\")",
+      "Bash(pkill -f \"node.*index.js.*start\")",
+      "Bash(echo \"Node PID: $!\")",
+      "Bash(chmod +x /home/sean/Documents/Projects/MADPro/start-emulator.sh)",
+      "Bash(bash start-emulator.sh Research_36)",
+      "Bash(echo \"Script PID: $!\")",
+      "Bash(grep -qE \"\\\\[OK\\\\] Emulator ready|ERROR\" /tmp/shell_emu.log)",
+      "Bash(adb devices *)"
     ]
   }
 }

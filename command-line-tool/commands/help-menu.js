@@ -40,6 +40,87 @@ USAGE
     madpro devices
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  check-emulator
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Diagnose emulator readiness. Checks and reports on:
+
+    KVM             /dev/kvm exists and is accessible by current user
+    Binaries        emulator, sdkmanager, avdmanager present
+    Host Vulkan     Vulkan ICD available (required for gfxstream renderer)
+    GuestAngle      Explains why API > 35 shows a grey screen and confirms
+                    that madpro start-emulator / setup-emulator apply the fix
+    System images   Lists all installed system images; flags API > 35 images
+                    that need -feature GuestAngle
+    AVDs            Lists all AVDs with API level, tag/ABI, and recommended
+                    launch flags including GuestAngle where needed
+
+  Known issue documented:
+    Emulator 36.x disables GuestAngle for API > 35 by default, causing a
+    solid grey screen. Fix: pass -feature GuestAngle at launch.
+    All madpro emulator commands apply this automatically.
+
+  Example:
+    madpro check-emulator
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  setup-emulator  <avd-name>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Download a system image (if not already installed), create a new AVD
+  (or wipe and recreate an existing one with --fresh), then boot it and
+  wait until fully ready.
+
+  Options:
+    --fresh             Delete existing AVD and recreate from scratch
+    --api <level>       Android API level                              [35]
+    --tag <tag>         google_apis_playstore | google_apis | default  [google_apis_playstore]
+    --abi <abi>         x86_64 | arm64-v8a                             [x86_64]
+    --device <type>     Hardware profile (avdmanager --list device)    [pixel_6]
+    --sdcard <mb>       SD card size in MB                             [2048]
+    --gpu <mode>        auto | host | swiftshader_indirect | off       [host]
+    --headless          No window (forces swiftshader_indirect)
+    --no-boot           Create AVD but do not boot it
+    --timeout <ms>      Max boot wait time                             [180000]
+
+  Examples:
+    # Create a fresh Play Store AVD on API 35 and boot it
+    madpro setup-emulator MyResearchAVD
+
+    # Recreate an existing AVD from scratch (wipes all data)
+    madpro setup-emulator MyResearchAVD --fresh
+
+    # API 34 google_apis image, headless boot
+    madpro setup-emulator Research_34 --api 34 --tag google_apis --headless
+
+    # Create only, no boot
+    madpro setup-emulator Research_35 --no-boot
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  start-emulator  [avd-name]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Launch an Android AVD emulator and wait until it is fully booted.
+  Omit [avd-name] to list available AVDs.
+
+  Options:
+    --no-snapshot       Cold boot — ignore saved snapshot
+    --wipe-data         Wipe userdata partition before boot
+    --gpu <mode>        GPU mode: auto | host | swiftshader_indirect | off  [host]
+    --headless          No window (forces swiftshader_indirect GPU)
+    --timeout <ms>      Max time to wait for boot                           [120000]
+
+  Examples:
+    # List available AVDs
+    madpro start-emulator
+
+    # Start an AVD and wait for boot
+    madpro start-emulator Pixel_6_API_34
+
+    # Headless (CI / no display)
+    madpro start-emulator Pixel_6_API_34 --headless
+
+    # Cold boot, wipe data
+    madpro start-emulator Pixel_6_API_34 --no-snapshot --wipe-data
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   download
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Download APKs from one of three backends:

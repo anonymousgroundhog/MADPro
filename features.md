@@ -29,7 +29,7 @@ CLI tool: `command-line-tool/` — `madpro` command, terminal-driven
 | **APK zipalign + signing** | Post-inject step (debug keystore) | Post-inject step (debug keystore) |
 | **Split APK support** | `adb install-multiple` | `adb install-multiple` |
 | **ADB instrumentation** | Tools tab instrument form | `madpro instrument <apk-dir>` |
-| **Dangerous permission grant** | 20 permissions, auto-granted | 20 permissions, auto-granted |
+| **Dangerous permission grant** | 20 permissions, auto-granted | `-g` flag at install — all runtime perms granted automatically |
 | **App launch via monkey** | `adb shell monkey` | `adb shell monkey` |
 | **Logcat capture to file** | 30 s fixed, streamed to `~/MADPro_Logcat/` | Configurable `--duration`, default 30 s |
 | **Bulk uninstall by category** | "Uninstall All" button | `madpro uninstall -c ... -n ...` |

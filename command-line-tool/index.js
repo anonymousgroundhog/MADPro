@@ -10,6 +10,9 @@
  *   help-menu          Detailed help for all commands
  *   check              Check tool availability
  *   devices            List connected ADB devices and AVDs
+ *   start-emulator     Launch an AVD and wait until booted
+ *   setup-emulator     Download image, create/recreate AVD, and boot it
+ *   check-emulator     Diagnose emulator GPU, KVM, GuestAngle, and AVD readiness
  *   download           Download APKs (ApkPure / Google Play / Androzoo)
  *   reset-failed       Delete .skip_list.json files to retry failed apps
  *   compile            Compile LogInjector.java
@@ -30,6 +33,9 @@ program
 require("./commands/help-menu").register(program);
 require("./commands/check").register(program);
 require("./commands/devices").register(program);
+require("./commands/start-emulator").register(program);
+require("./commands/setup-emulator").register(program);
+require("./commands/check-emulator").register(program);
 require("./commands/download").register(program);
 require("./commands/reset-failed").register(program);
 require("./commands/compile").register(program);

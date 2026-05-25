@@ -127,7 +127,7 @@ public class LogInjector {
         Options.v().set_allow_phantom_refs(true);
         Options.v().set_prepend_classpath(true);
         Options.v().set_validate(false);
-        Options.v().set_process_multiple_dex(true);
+        Options.v().set_search_dex_in_archives(true);
         Options.v().set_src_prec(Options.src_prec_apk);
         Options.v().set_output_format(Options.output_format_dex);
         Options.v().set_android_jars(androidPlatforms);

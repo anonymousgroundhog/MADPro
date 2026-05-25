@@ -1,0 +1,15 @@
+{
+  "name": "madpro-cli",
+  "version": "1.0.0",
+  "description": "MADPro command-line tool — APK download, injection, instrumentation",
+  "main": "index.js",
+  "bin": {
+    "madpro": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "commander": "^11.1.0"
+  }
+}

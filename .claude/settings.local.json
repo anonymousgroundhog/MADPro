@@ -109,7 +109,15 @@
       "Bash(killall -9 node sleep 3)",
       "Bash(kill -9 73882)",
       "Bash(curl *)",
-      "Bash(npm view *)"
+      "Bash(npm view *)",
+      "Bash(chmod +x /home/sean/Documents/Projects/MADPro/command-line-tool/index.js)",
+      "Bash(npm link *)",
+      "Bash(chmod +x /home/sean/.local/bin/madpro)",
+      "Bash(madpro --version)",
+      "Bash(mkdir -p \"/tmp/My Passport/test\")",
+      "Bash(echo \"dummy\")",
+      "Bash(java -cp java:jar_libs/commons-io-2.6.jar:jar_libs/polyglot-2006.jar:jar_libs/soot-4.4.0-20220321.130129-1-jar-with-dependencies.jar LogInjector --inject-all /home/sean/Android/Sdk/platforms '/tmp/My Passport/test/base.apk' '/tmp/My Passport/output/dir')",
+      "Bash(jar tf *)"
     ]
   }
 }

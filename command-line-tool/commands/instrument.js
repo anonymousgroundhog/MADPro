@@ -169,6 +169,20 @@ function register(program) {
         await run(adb, [...serialArgs, "shell", "pm", "uninstall", pkg]);
       }
 
+      // Remove logs that contain no SootInjection output — no instrumentation fired
+      let removed = 0;
+      for (const entry of fs.readdirSync(logDir)) {
+        if (!entry.endsWith(".log")) continue;
+        const logPath = path.join(logDir, entry);
+        const content = fs.readFileSync(logPath, "utf8");
+        if (!content.includes("SootInjection")) {
+          fs.unlinkSync(logPath);
+          console.log(`[CLEAN] Removed (no SootInjection): ${entry}`);
+          removed++;
+        }
+      }
+      if (removed > 0) console.log(`[CLEAN] Removed ${removed} log(s) with no instrumentation output.`);
+
       console.log(`\n[DONE] Logs saved to ${logDir}`);
     });
 }

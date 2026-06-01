@@ -994,6 +994,8 @@ function renderHtml() {
       <option value="">— select a log file —</option>
     </select>
     <button class="tools-btn-sm" onclick="loadLogFile()">Refresh</button>
+    <button class="tools-btn-sm" onclick="filterLogsByPkg()" title="Filter both dropdowns to only log files containing package filter matches">Filter</button>
+    <button class="tools-btn-sm" onclick="resetLogFileLists()" title="Restore all log files">Reset</button>
     <button class="tools-btn-sm" onclick="clearLogViewer()">Clear</button>
   </div>
   <!-- App package row — populated by scanning all logs in the directory -->
@@ -3176,6 +3178,57 @@ let _appScanData = null;
 // _appLogEntries: merged entries for the currently selected app
 let _appLogEntries = [];
 
+async function filterLogsByPkg() {
+  var patterns = readPkgFilters();
+  var keywords = (document.getElementById('kwInput').value || '')
+    .split('\\n').map(function(k) { return k.replace(/[^a-zA-Z0-9_]/g, '').trim(); }).filter(function(k) { return k.length > 0; });
+  if (!patterns.length && !keywords.length) { resetLogFileLists(); return; }
+  var dir = document.getElementById('logDirInput').value.trim() || '~/MADPro_Logcat';
+  var meta = document.getElementById('logViewerMeta');
+  var appMeta = document.getElementById('logAppMeta');
+  meta.textContent = 'Filtering log files…';
+  try {
+    var url = '/api/logs/filter-dir?dir=' + encodeURIComponent(dir);
+    if (patterns.length) url += '&pkg=' + encodeURIComponent(JSON.stringify(patterns));
+    if (keywords.length) url += '&q='   + encodeURIComponent(JSON.stringify(keywords));
+    var data = await api(url);
+
+    // Repopulate file dropdown
+    var fileSel = document.getElementById('logFileSelect');
+    fileSel.innerHTML = '<option value="">— select a log file —</option>';
+    for (var i = 0; i < data.files.length; i++) {
+      var f = data.files[i];
+      var opt = document.createElement('option');
+      opt.value = f.path; opt.textContent = f.name;
+      fileSel.appendChild(opt);
+    }
+
+    // Repopulate app dropdown + update _appScanData to filtered subset
+    var appSel = document.getElementById('logAppSelect');
+    appSel.innerHTML = '<option value="">— select an app —</option>';
+    for (var j = 0; j < data.packages.length; j++) {
+      var pkg = data.packages[j];
+      var aopt = document.createElement('option');
+      aopt.value = pkg.name;
+      aopt.textContent = pkg.name + ' (' + pkg.files.length + ' file' + (pkg.files.length !== 1 ? 's' : '') + ')';
+      appSel.appendChild(aopt);
+    }
+    _appScanData = { dir: data.dir, totalFiles: data.totalFiles, packages: data.packages };
+
+    var filterDesc = [];
+    if (patterns.length) filterDesc.push('pkg');
+    if (keywords.length) filterDesc.push('keywords');
+    meta.textContent = data.files.length + ' of ' + data.totalFiles + ' log file(s) match ' + filterDesc.join(' + ') + ' filter — ' + dir;
+    appMeta.textContent = data.packages.length + ' of ' + data.totalApps + ' app(s) match filter';
+  } catch(e) {
+    meta.textContent = 'Filter error: ' + e.message;
+  }
+}
+
+async function resetLogFileLists() {
+  await refreshLogFileList();
+}
+
 // Called when the user clicks "Load" on the directory input.
 // Scans the directory for .log files and detects app package names via nativeloader lines.
 async function refreshLogFileList() {
@@ -3215,6 +3268,9 @@ async function refreshLogFileList() {
 
     document.getElementById('logViewerMeta').textContent =
       listData.files.length ? listData.files.length + ' log file(s) in ' + listData.dir : 'No .log files found in ' + listData.dir;
+
+    // Auto-apply pkg filter to both dropdowns if patterns are already set
+    if (readPkgFilters().length) await filterLogsByPkg();
   } catch (e) {
     appSel.innerHTML = '<option value="">— error scanning —</option>';
     appMeta.textContent = 'Error: ' + e.message;
@@ -3414,14 +3470,44 @@ function cleanKeyword(kw) {
   return kw.replace(/[^a-zA-Z0-9_]/g, '');
 }
 
+// Client-side search against an in-memory entries array — returns same shape as /api/logs/search
+function _searchEntriesClient(entries, queriesLow, pkgPatterns) {
+  var filtered = pkgPatterns.length
+    ? entries.filter(function(e) { var cls = (e.className || e.sig || '').toLowerCase(); return pkgPatterns.some(function(p) { return cls.indexOf(p) !== -1; }); })
+    : entries;
+  var perKeyword = queriesLow.map(function(ql) {
+    return { query: ql, count: filtered.filter(function(e) { return _clientEntryMatchesQuery(e, ql); }).length };
+  });
+  var sequence = [];
+  for (var i = 0; i < filtered.length; i++) {
+    var e = filtered[i];
+    var kwIndices = [];
+    for (var qi = 0; qi < queriesLow.length; qi++) {
+      if (_clientEntryMatchesQuery(e, queriesLow[qi])) kwIndices.push(qi);
+    }
+    if (kwIndices.length) sequence.push({ entry: e, kwIndices: kwIndices });
+  }
+  return { perKeyword: perKeyword, sequence: sequence };
+}
+
+function _clientEntryMatchesQuery(e, queryLow) {
+  if (e.methodName) {
+    var mn = e.methodName.toLowerCase();
+    if (mn.indexOf(queryLow) !== -1) return true;
+    if ((e.methodName + '(').toLowerCase().indexOf(queryLow) !== -1) return true;
+  }
+  if (e.sig && e.sig.toLowerCase().indexOf(queryLow) !== -1) return true;
+  return false;
+}
+
 async function runKeywordSearch() {
   var raw = document.getElementById('kwInput').value;
   var keywords = raw.split('\\n').map(function(k) { return k.trim(); }).filter(function(k) { return k.length > 0; });
   var pkgFilters = readPkgFilters();
   var out = document.getElementById('kwResults');
   if (!keywords.length) { out.innerHTML = ''; return; }
-  if (!_currentLogFile) {
-    out.innerHTML = '<div style="color:var(--text-muted);font-size:.82rem;">Load a log file first.</div>';
+  if (!_currentLogFile && !_appLogEntries.length) {
+    out.innerHTML = '<div style="color:var(--text-muted);font-size:.82rem;">Load a log file or select an app first.</div>';
     return;
   }
 
@@ -3434,12 +3520,18 @@ async function runKeywordSearch() {
     return { original: kw, clean: clean, query: clean, color: palette[i % palette.length] };
   });
 
-  // Fetch search results from server for all keywords in one call
   try {
     var queries = kwMeta.map(function(km) { return km.query; });
-    var url = '/api/logs/search?file=' + encodeURIComponent(_currentLogFile) + '&q=' + encodeURIComponent(JSON.stringify(queries));
-    if (pkgFilters.length) url += '&pkg=' + encodeURIComponent(JSON.stringify(pkgFilters));
-    var data = await api(url);
+    var data;
+    if (_appLogEntries.length) {
+      // App mode — search in-memory entries client-side
+      data = _searchEntriesClient(_appLogEntries, queries.map(function(q) { return q.toLowerCase(); }), pkgFilters);
+    } else {
+      // Single-file mode — hit the server
+      var url = '/api/logs/search?file=' + encodeURIComponent(_currentLogFile) + '&q=' + encodeURIComponent(JSON.stringify(queries));
+      if (pkgFilters.length) url += '&pkg=' + encodeURIComponent(JSON.stringify(pkgFilters));
+      data = await api(url);
+    }
 
     // data.results: [ { query, matches: [{entry, kwIdx}...] }, ... ]  (in log order)
     // data.perKeyword: [ { query, count }, ... ]
@@ -6136,6 +6228,59 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // GET /api/logs/filter-dir?dir=/path&pkg=["com.example"]&q=["init","build"]
+  if (req.method === "GET" && pathname === "/api/logs/filter-dir") {
+    const dirParam = (reqUrl.searchParams.get("dir") || "~/MADPro_Logcat").trim();
+    const pkgParam = (reqUrl.searchParams.get("pkg") || "").trim();
+    const qParam   = (reqUrl.searchParams.get("q")   || "").trim();
+    const abs = path.resolve(dirParam.replace(/^~/, os.homedir()));
+    let pkgPatterns = [];
+    if (pkgParam) { try { pkgPatterns = JSON.parse(pkgParam).map(p => p.toLowerCase()).filter(Boolean); } catch { pkgPatterns = [pkgParam.toLowerCase()]; } }
+    let queriesLow = [];
+    if (qParam) { try { queriesLow = JSON.parse(qParam).map(q => q.toLowerCase()).filter(Boolean); } catch { queriesLow = [qParam.toLowerCase()]; } }
+    try {
+      const dirents = fs.readdirSync(abs, { withFileTypes: true });
+      const allFiles = dirents
+        .filter(e => e.isFile() && e.name.toLowerCase().endsWith(".log"))
+        .map(e => path.join(abs, e.name))
+        .sort();
+      const totalFiles = allFiles.length;
+
+      // Single pass: read each file once, check entries + extract app packages
+      const matchedFiles = [];
+      const pkgMap = new Map();    // pkg -> Set of basenames (matched files only)
+      const allPkgSet = new Set(); // all app packages across all files (for totalApps)
+      for (const fp of allFiles) {
+        const content = fs.readFileSync(fp, "utf8");
+        const filePkgs = extractAppPackages(content);
+        for (const p of filePkgs) allPkgSet.add(p);
+        const entries = parseLogEntries(fp);
+        const pkgMatch = pkgPatterns.length
+          ? entries.some(e => { const cls = (e.className || e.sig || "").toLowerCase(); return pkgPatterns.some(p => cls.indexOf(p) !== -1); })
+          : true;
+        const kwMatch = queriesLow.length
+          ? entries.some(e => queriesLow.some(q => entryMatchesQuery(e, q)))
+          : true;
+        if (pkgMatch && kwMatch) {
+          matchedFiles.push({ name: path.basename(fp), path: fp });
+          for (const pkg of filePkgs) {
+            if (!pkgMap.has(pkg)) pkgMap.set(pkg, new Set());
+            pkgMap.get(pkg).add(path.basename(fp));
+          }
+        }
+      }
+      const totalApps = allPkgSet.size;
+
+      const packages = [...pkgMap.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([name, files]) => ({ name, files: [...files].sort() }));
+
+      return jsonResponse(res, { dir: abs, totalFiles, totalApps, files: matchedFiles, packages });
+    } catch (err) {
+      return jsonResponse(res, { error: err.message }, 500);
+    }
+  }
+
   // GET /api/logs/list?dir=/path — list .log files in a directory
   if (req.method === "GET" && pathname === "/api/logs/list") {
     const dirParam = (reqUrl.searchParams.get("dir") || "~/MADPro_Logcat").trim();
@@ -6152,7 +6297,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // GET /api/logs/read?file=/path&offset=0&limit=300&pkg=com.example
+  // GET /api/logs/read?file=/path&offset=0&limit=300&pkg=["com.x"]
   if (req.method === "GET" && pathname === "/api/logs/read") {
     const fileParam = reqUrl.searchParams.get("file") || "";
     if (!fileParam) return jsonResponse(res, { error: "Missing file" }, 400);

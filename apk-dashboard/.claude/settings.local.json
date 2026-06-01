@@ -41,7 +41,18 @@
       "Bash(kill %1)",
       "Bash(awk 'NR>1493 && /<\\\\/script>/{exit} NR>1493' /tmp/rendered.html)",
       "Bash(curl -s http://localhost:3456/)",
-      "Bash(awk 'NR>1493 && /<\\\\/script>/{exit} NR>1493' /tmp/rendered2.html)"
+      "Bash(awk 'NR>1493 && /<\\\\/script>/{exit} NR>1493' /tmp/rendered2.html)",
+      "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0} p' /tmp/r3.html)",
+      "Bash(pkill -f \"node server.js\")",
+      "Bash(awk 'NR==1{found=0} /^<script>/{found=1;next} /^<\\\\/script>/{found=0;next} found{print}' /tmp/r3.html)",
+      "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r4.html)",
+      "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r5.html)",
+      "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r6.html)",
+      "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r7.html)",
+      "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r8.html)",
+      "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r9.html)",
+      "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r10.html)",
+      "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r11.html)"
     ]
   }
 }

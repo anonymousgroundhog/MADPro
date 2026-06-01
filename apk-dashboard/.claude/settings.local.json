@@ -29,7 +29,19 @@
       "Bash(adb -s ZT4229DSNS pull /sdcard/ui3.xml /tmp/ps_detail.xml)",
       "Bash(adb -s ZT4229DSNS shell am start -a android.intent.action.VIEW -d \"market://search?q=&c=apps&cat=BUSINESS\" com.android.vending)",
       "Bash(adb -s ZT4229DSNS shell uiautomator dump /sdcard/ui_cat.xml)",
-      "Bash(adb -s ZT4229DSNS pull /sdcard/ui_cat.xml /tmp/ui_cat.xml)"
+      "Bash(adb -s ZT4229DSNS pull /sdcard/ui_cat.xml /tmp/ui_cat.xml)",
+      "Bash(grep -n \"return \\\\`\\\\|^\\\\`;\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Bash(curl -s http://localhost:3000/)",
+      "Bash(sed -n '/<script>/,/<\\\\/script>/p')",
+      "Read(//tmp/**)",
+      "Bash(awk 'NR==1751{found=1; next} found{print NR-1751\": \"$0}')",
+      "Bash(grep -n \"^\\\\\\\\\\\\`;\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)",
+      "Bash(awk NR>=3620 && NR<=3640 *)",
+      "Bash(grep *)",
+      "Bash(kill %1)",
+      "Bash(awk 'NR>1493 && /<\\\\/script>/{exit} NR>1493' /tmp/rendered.html)",
+      "Bash(curl -s http://localhost:3456/)",
+      "Bash(awk 'NR>1493 && /<\\\\/script>/{exit} NR>1493' /tmp/rendered2.html)"
     ]
   }
 }

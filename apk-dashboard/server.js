@@ -1018,6 +1018,15 @@ function renderHtml() {
     <!-- Left: keyword search -->
     <div>
       <div style="font-weight:700;font-size:.9rem;color:var(--accent-no-ads);margin-bottom:10px;">Keyword Search</div>
+      <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:4px;">Package filter — one partial match per line (e.g. <code>com.google.android</code>):</div>
+      <textarea id="pkgFilter" rows="3" style="
+        width:100%;box-sizing:border-box;background:var(--card-bg);border:1px solid var(--card-border);
+        color:var(--text);padding:8px 12px;border-radius:8px;font-family:monospace;font-size:.82rem;
+        line-height:1.6;resize:vertical;margin-bottom:6px;
+      " placeholder="com.google.android&#10;com.example.app"></textarea>
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <button class="tools-btn-sm" onclick="applyPkgFilterToLogView()" title="Filter the log view above by these package patterns">Filter Log View</button>
+      </div>
       <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:6px;">Enter keywords (one per line) to check against loaded log entries:</div>
       <textarea id="kwInput" rows="8" style="
         width:100%;box-sizing:border-box;background:var(--card-bg);border:1px solid var(--card-border);
@@ -3077,7 +3086,10 @@ async function _renderLogPage(file, offset) {
     document.getElementById('logViewerMeta').textContent = 'Loading…';
   }
   try {
-    const data = await api('/api/logs/read?file=' + encodeURIComponent(file) + '&offset=' + offset + '&limit=' + LOG_PAGE);
+    var pkgs = readPkgFilters();
+    var readUrl = '/api/logs/read?file=' + encodeURIComponent(file) + '&offset=' + offset + '&limit=' + LOG_PAGE;
+    if (pkgs.length) readUrl += '&pkg=' + encodeURIComponent(JSON.stringify(pkgs));
+    const data = await api(readUrl);
     if (offset === 0) {
       out.innerHTML = '';
       if (!data.total) {
@@ -3130,6 +3142,17 @@ async function _renderLogPage(file, offset) {
     if (offset === 0) out.scrollTop = 0;
   } catch (e) {
     out.textContent = 'Error loading file: ' + e.message;
+  }
+}
+
+// Apply pkgFilter to the log viewer output (above the keyword search)
+function applyPkgFilterToLogView() {
+  if (_appLogEntries.length) {
+    // App mode: filter in-memory entries client-side
+    renderAppLogEntries();
+  } else if (_currentLogFile) {
+    // Single-file mode: re-render from server with pkg param
+    _renderLogPage(_currentLogFile, 0);
   }
 }
 
@@ -3235,10 +3258,17 @@ function renderAppLogEntries() {
   const meta = document.getElementById('logViewerMeta');
   out.innerHTML = '';
 
-  // Show only unique entries
-  const unique = _appLogEntries.filter(e => !e.duplicate);
+  const pkgs = readPkgFilters();
+  // Show only unique entries, optionally filtered by package patterns (OR match)
+  let unique = _appLogEntries.filter(e => !e.duplicate);
+  if (pkgs.length) {
+    unique = unique.filter(e => {
+      const cls = (e.className || e.sig || '').toLowerCase();
+      return pkgs.some(function(p) { return cls.indexOf(p) !== -1; });
+    });
+  }
   if (!unique.length) {
-    out.textContent = '(No SootInjection method entries found for this app)';
+    out.textContent = pkgs.length ? '(No entries matching package filter: ' + pkgs.join(', ') + ')' : '(No SootInjection method entries found for this app)';
     return;
   }
 
@@ -3374,6 +3404,12 @@ let _fsmLogEntries = []; // full entry objects from the currently loaded log
 let _kwSequence = [];   // last keyword search call-sequence: [{entry, kwIndices}] in log order
 
 // Strip special chars from a keyword, leaving only alphanumeric + underscore
+// Returns array of lowercase pkg patterns from the textarea (empty array = no filter)
+function readPkgFilters() {
+  return (document.getElementById('pkgFilter').value || '')
+    .split('\\n').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; });
+}
+
 function cleanKeyword(kw) {
   return kw.replace(/[^a-zA-Z0-9_]/g, '');
 }
@@ -3381,6 +3417,7 @@ function cleanKeyword(kw) {
 async function runKeywordSearch() {
   var raw = document.getElementById('kwInput').value;
   var keywords = raw.split('\\n').map(function(k) { return k.trim(); }).filter(function(k) { return k.length > 0; });
+  var pkgFilters = readPkgFilters();
   var out = document.getElementById('kwResults');
   if (!keywords.length) { out.innerHTML = ''; return; }
   if (!_currentLogFile) {
@@ -3400,7 +3437,9 @@ async function runKeywordSearch() {
   // Fetch search results from server for all keywords in one call
   try {
     var queries = kwMeta.map(function(km) { return km.query; });
-    var data = await api('/api/logs/search?file=' + encodeURIComponent(_currentLogFile) + '&q=' + encodeURIComponent(JSON.stringify(queries)));
+    var url = '/api/logs/search?file=' + encodeURIComponent(_currentLogFile) + '&q=' + encodeURIComponent(JSON.stringify(queries));
+    if (pkgFilters.length) url += '&pkg=' + encodeURIComponent(JSON.stringify(pkgFilters));
+    var data = await api(url);
 
     // data.results: [ { query, matches: [{entry, kwIdx}...] }, ... ]  (in log order)
     // data.perKeyword: [ { query, count }, ... ]
@@ -3428,8 +3467,9 @@ async function runKeywordSearch() {
         + '</div>';
     }
 
+    var pkgBadge = pkgFilters.length ? ' <span style="font-size:.78rem;font-weight:400;opacity:.85;">| pkg: ' + pkgFilters.map(function(p) { return '<code>' + escHtml(p) + '</code>'; }).join(', ') + '</span>' : '';
     var html = '<div style="font-size:.88rem;font-weight:700;color:' + summaryColor + ';margin-bottom:10px;padding:8px 12px;background:var(--card-bg);border:1px solid ' + summaryColor + ';border-radius:6px;">'
-      + summary + ' &mdash; ' + hitCount + ' / ' + total + ' keywords found</div>'
+      + summary + ' &mdash; ' + hitCount + ' / ' + total + ' keywords found' + pkgBadge + '</div>'
       + '<div style="margin-bottom:16px;">' + summaryRows + '</div>';
 
     // Save sequence for Push Data to Contract
@@ -3483,6 +3523,7 @@ async function runKeywordSearch() {
 
 function clearKeywordSearch() {
   document.getElementById('kwInput').value = '';
+  document.getElementById('pkgFilter').value = '';
   document.getElementById('kwResults').innerHTML = '';
   _kwSequence = [];
 }
@@ -6111,15 +6152,21 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // GET /api/logs/read?file=/path&offset=0&limit=300
+  // GET /api/logs/read?file=/path&offset=0&limit=300&pkg=com.example
   if (req.method === "GET" && pathname === "/api/logs/read") {
     const fileParam = reqUrl.searchParams.get("file") || "";
     if (!fileParam) return jsonResponse(res, { error: "Missing file" }, 400);
     const abs = path.resolve(fileParam.replace(/^~/, os.homedir()));
-    const offset = Math.max(0, parseInt(reqUrl.searchParams.get("offset") || "0", 10));
-    const limit  = Math.min(2000, Math.max(1, parseInt(reqUrl.searchParams.get("limit") || "300", 10)));
+    const offset   = Math.max(0, parseInt(reqUrl.searchParams.get("offset") || "0", 10));
+    const limit    = Math.min(2000, Math.max(1, parseInt(reqUrl.searchParams.get("limit") || "300", 10)));
+    const pkgParam = (reqUrl.searchParams.get("pkg") || "").trim();
     try {
-      const entries = parseLogEntries(abs);
+      const allEntries = parseLogEntries(abs);
+      let pkgPatterns = [];
+      if (pkgParam) { try { pkgPatterns = JSON.parse(pkgParam).map(p => p.toLowerCase()).filter(Boolean); } catch { pkgPatterns = [pkgParam.toLowerCase()]; } }
+      const entries = pkgPatterns.length
+        ? allEntries.filter(e => { const cls = (e.className || e.sig || "").toLowerCase(); return pkgPatterns.some(p => cls.indexOf(p) !== -1); })
+        : allEntries;
       const unique = entries.filter(e => !e.duplicate).length;
       return jsonResponse(res, {
         file: abs,
@@ -6132,17 +6179,23 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // GET /api/logs/search?file=/path&q=["keyword1","keyword2"]
+  // GET /api/logs/search?file=/path&q=["keyword1","keyword2"]&pkg=com.example
   if (req.method === "GET" && pathname === "/api/logs/search") {
     const fileParam = reqUrl.searchParams.get("file") || "";
     const qParam    = reqUrl.searchParams.get("q") || "[]";
+    const pkgParam  = (reqUrl.searchParams.get("pkg") || "").trim();
     if (!fileParam) return jsonResponse(res, { error: "Missing file" }, 400);
     const abs = path.resolve(fileParam.replace(/^~/, os.homedir()));
     let queries;
     try { queries = JSON.parse(qParam); } catch { return jsonResponse(res, { error: "Invalid q param" }, 400); }
     if (!Array.isArray(queries)) return jsonResponse(res, { error: "q must be array" }, 400);
     try {
-      const entries = parseLogEntries(abs);
+      const allEntries = parseLogEntries(abs);
+      let pkgPatterns = [];
+      if (pkgParam) { try { pkgPatterns = JSON.parse(pkgParam).map(p => p.toLowerCase()).filter(Boolean); } catch { pkgPatterns = [pkgParam.toLowerCase()]; } }
+      const entries = pkgPatterns.length
+        ? allEntries.filter(e => { const cls = (e.className || e.sig || "").toLowerCase(); return pkgPatterns.some(p => cls.indexOf(p) !== -1); })
+        : allEntries;
       const queriesLow = queries.map(q => q.toLowerCase());
 
       // Per-keyword counts

@@ -1164,8 +1164,8 @@ function renderHtml() {
 <!-- ── FSM Analyzer tab content ── -->
 <div id="tabFsm" style="display:none; padding:20px 24px;">
 
-  <!-- Top bar: log file picker (mirrors Log Viewer) -->
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+  <!-- Top bar: dir + file picker + filter controls -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
     <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:260px;">
       <input type="text" id="fsmLogDirInput" class="tools-input" style="flex:1;" placeholder="~/MADPro_Logcat" />
       <button class="tools-btn-sm" onclick="browseForTools('fsmLogDirInput')">Browse…</button>
@@ -1175,56 +1175,69 @@ function renderHtml() {
       <option value="">— select a log file —</option>
     </select>
     <button class="tools-btn-sm" onclick="fsmRefreshLogList()">Refresh</button>
+    <button class="tools-btn-sm" onclick="fsmFilterByPkg()" title="Filter both dropdowns to log files containing package filter matches">Filter</button>
+    <button class="tools-btn-sm" onclick="fsmResetLists()" title="Restore all log files">Reset</button>
+  </div>
+  <!-- App row -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+    <div style="font-size:.8rem;color:var(--text-muted);white-space:nowrap;">App:</div>
+    <select id="fsmAppSelect" class="tools-input" style="min-width:280px;max-width:520px;" onchange="fsmLoadAppLogs()">
+      <option value="">— load directory to detect apps —</option>
+    </select>
+    <div style="font-size:.78rem;color:var(--text-muted);" id="fsmAppMeta"></div>
+  </div>
+  <!-- Pkg filter -->
+  <div style="margin-bottom:14px;">
+    <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:4px;">Package filter — one partial match per line (e.g. <code>com.google.android</code>):</div>
+    <textarea id="fsmPkgFilter" rows="3" style="
+      width:100%;box-sizing:border-box;background:var(--card-bg);border:1px solid var(--card-border);
+      color:var(--text);padding:8px 12px;border-radius:8px;font-family:monospace;font-size:.82rem;
+      line-height:1.6;resize:vertical;
+    " placeholder="com.google.android&#10;com.example.app"></textarea>
   </div>
   <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:12px;" id="fsmLogMeta"></div>
 
-  <!-- Two-column: drop zone left, results right -->
-  <div style="display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start;">
-
-    <!-- Left: FSM image drop zone + controls -->
-    <div>
-      <div style="font-weight:700;font-size:.85rem;color:var(--accent-no-ads);margin-bottom:8px;">FSM Model Image</div>
-
-      <!-- Drop zone -->
-      <div id="fsmDropZone" style="
-        border:2px dashed var(--card-border);border-radius:10px;padding:24px 16px;
-        text-align:center;cursor:pointer;transition:border-color .15s;min-height:160px;
-        display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
-        background:var(--card-bg);
-      "
-        onclick="document.getElementById('fsmImageInput').click()"
-        ondragover="event.preventDefault();this.style.borderColor='var(--accent-no-ads)'"
-        ondragleave="this.style.borderColor='var(--card-border)'"
-        ondrop="fsmHandleDrop(event)">
-        <div id="fsmDropLabel" style="color:var(--text-muted);font-size:.82rem;pointer-events:none;">
-          Drop FSM image here<br>or click to browse
-        </div>
-        <img id="fsmDropPreview" style="max-width:100%;max-height:160px;border-radius:6px;display:none;" />
-      </div>
-      <input type="file" id="fsmImageInput" accept="image/*" style="display:none;" onchange="fsmHandleFileInput(this)" />
-
-      <button class="tools-btn-primary" id="fsmAnalyzeBtn" style="width:100%;margin-top:10px;" onclick="runFsmAnalysis()" disabled>
-        Analyze with AI
-      </button>
-      <div id="fsmAnalyzeStatus" style="font-size:.78rem;margin-top:6px;min-height:1.2em;color:var(--text-muted);text-align:center;"></div>
-
-      <!-- Extracted keywords -->
-      <div id="fsmKeywordsBox" style="display:none;margin-top:14px;">
-        <div style="font-weight:700;font-size:.82rem;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em;">EXTRACTED TRANSITIONS</div>
-        <div id="fsmKeywordsList" style="font-size:.78rem;line-height:1.9;"></div>
-      </div>
-    </div>
-
-    <!-- Right: violations + call sequence -->
-    <div>
-      <div style="font-weight:700;font-size:.85rem;color:var(--accent-no-ads);margin-bottom:8px;">Analysis Results</div>
-      <div id="fsmResultsBox" style="
-        background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;
-        padding:16px;min-height:220px;font-size:.8rem;color:var(--text-muted);
-      ">Drop an FSM model image and select a log file, then click Analyze.</div>
-    </div>
-
+  <!-- FSM Model Text + Results -->
+  <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:8px;">
+    Paste your FSM model below. Format:
+    <code style="background:var(--card-bg);padding:1px 5px;border-radius:4px;font-size:.75rem;">From: "State Name"</code> then
+    <code style="background:var(--card-bg);padding:1px 5px;border-radius:4px;font-size:.75rem;">To self: method()</code> or
+    <code style="background:var(--card-bg);padding:1px 5px;border-radius:4px;font-size:.75rem;">To "Target": method1(), method2(), or method3()</code>.
+    Methods matched against log entries by name (case-insensitive).
   </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;">
+    <div>
+      <textarea id="fsmModelText" rows="22" style="
+        width:100%;box-sizing:border-box;background:var(--card-bg);border:1px solid var(--card-border);
+        color:var(--text);padding:10px 12px;border-radius:8px;font-family:monospace;font-size:.78rem;
+        line-height:1.6;resize:vertical;
+      " placeholder='From: "The app has started"
+To self: attachInfo()
+To "AdView set": build()
+
+From: "AdView set"
+To self: build()
+To "No Ads displayed": initialize()
+
+From: "No Ads displayed"
+To self: initialize()
+To "Ad loaded": onAdLoaded()'></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
+        <button class="tools-btn-primary" onclick="runFsmTextCheck()">Check Sequence</button>
+        <button class="tools-btn-sm" onclick="document.getElementById('fsmModelText').value='';document.getElementById('fsmTextResults').innerHTML='';">Clear</button>
+        <span id="fsmTextCheckStatus" style="font-size:.78rem;color:var(--text-muted);"></span>
+      </div>
+    </div>
+    <div>
+      <div style="font-weight:700;font-size:.82rem;color:var(--text-muted);margin-bottom:8px;letter-spacing:.04em;">SEQUENCE CHECK RESULTS</div>
+      <div id="fsmTextResults" style="
+        background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;
+        padding:14px 16px;min-height:240px;font-size:.8rem;color:var(--text-muted);
+        max-height:560px;overflow-y:auto;
+      ">Load a log file or select an app in Log Viewer, paste FSM model above, then click Check Sequence.</div>
+    </div>
+  </div>
+
 </div><!-- /tabFsm -->
 
 <!-- ── Jimple APK browser modal ── -->
@@ -4102,9 +4115,8 @@ async function settingsTest() {
 
 // ── FSM Analyzer ──────────────────────────────────────────────────────────────
 
-var _fsmImageBase64 = '';
-var _fsmImageMime   = 'image/png';
-var _fsmLogPath     = '';
+var _fsmLogPath   = '';
+var _fsmScanData  = null; // {dir, packages:[{name,files:[]}], totalFiles}
 
 function fsmInitTab() {
   var dir = document.getElementById('fsmLogDirInput').value.trim();
@@ -4114,201 +4126,404 @@ function fsmInitTab() {
   }
 }
 
+function fsmReadPkgFilters() {
+  return (document.getElementById('fsmPkgFilter').value || '')
+    .split('\\n').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; });
+}
+
 async function fsmRefreshLogList() {
   var dir = document.getElementById('fsmLogDirInput').value.trim() || '~/MADPro_Logcat';
+  var meta = document.getElementById('fsmLogMeta');
+  var appMeta = document.getElementById('fsmAppMeta');
+  var appSel = document.getElementById('fsmAppSelect');
+  appSel.innerHTML = '<option value="">— scanning… —</option>';
+  appMeta.textContent = '';
   try {
-    var data = await api('/api/logs/list?dir=' + encodeURIComponent(dir));
+    var listData = await api('/api/logs/list?dir=' + encodeURIComponent(dir));
     var sel = document.getElementById('fsmLogFileSelect');
     var prev = sel.value;
     sel.innerHTML = '<option value="">— select a log file —</option>';
-    for (var i = 0; i < (data.files || []).length; i++) {
-      var f = data.files[i];
+    for (var i = 0; i < (listData.files || []).length; i++) {
+      var f = listData.files[i];
       var opt = document.createElement('option');
       opt.value = f.path; opt.textContent = f.name;
       sel.appendChild(opt);
     }
     if (prev && [...sel.options].some(function(o) { return o.value === prev; })) sel.value = prev;
-    document.getElementById('fsmLogMeta').textContent =
-      data.files.length ? data.files.length + ' log file(s) found' : 'No .log files found in ' + data.dir;
+
+    var scanData = await api('/api/logs/scan-dir?dir=' + encodeURIComponent(dir));
+    _fsmScanData = scanData;
+    appSel.innerHTML = '<option value="">— select an app —</option>';
+    for (var j = 0; j < (scanData.packages || []).length; j++) {
+      var pkg = scanData.packages[j];
+      var aopt = document.createElement('option');
+      aopt.value = pkg.name;
+      aopt.textContent = pkg.name + ' (' + pkg.files.length + ' file' + (pkg.files.length !== 1 ? 's' : '') + ')';
+      appSel.appendChild(aopt);
+    }
+    var pkgCount = (scanData.packages || []).length;
+    appMeta.textContent = pkgCount
+      ? pkgCount + ' app' + (pkgCount !== 1 ? 's' : '') + ' detected'
+      : 'No apps detected';
+    meta.textContent = listData.files.length + ' log file(s) in ' + listData.dir;
+
+    if (fsmReadPkgFilters().length) await fsmFilterByPkg();
   } catch(e) {
-    document.getElementById('fsmLogMeta').textContent = 'Error: ' + e.message;
+    appSel.innerHTML = '<option value="">— error —</option>';
+    meta.textContent = 'Error: ' + e.message;
   }
+}
+
+async function fsmFilterByPkg() {
+  var patterns = fsmReadPkgFilters();
+  if (!patterns.length) { fsmResetLists(); return; }
+  var dir = document.getElementById('fsmLogDirInput').value.trim() || '~/MADPro_Logcat';
+  var meta = document.getElementById('fsmLogMeta');
+  var appMeta = document.getElementById('fsmAppMeta');
+  meta.textContent = 'Filtering…';
+  try {
+    var url = '/api/logs/filter-dir?dir=' + encodeURIComponent(dir)
+      + '&pkg=' + encodeURIComponent(JSON.stringify(patterns));
+    var data = await api(url);
+
+    var fileSel = document.getElementById('fsmLogFileSelect');
+    fileSel.innerHTML = '<option value="">— select a log file —</option>';
+    for (var i = 0; i < data.files.length; i++) {
+      var f = data.files[i];
+      var opt = document.createElement('option');
+      opt.value = f.path; opt.textContent = f.name;
+      fileSel.appendChild(opt);
+    }
+
+    var appSel = document.getElementById('fsmAppSelect');
+    appSel.innerHTML = '<option value="">— select an app —</option>';
+    for (var j = 0; j < data.packages.length; j++) {
+      var pkg = data.packages[j];
+      var aopt = document.createElement('option');
+      aopt.value = pkg.name;
+      aopt.textContent = pkg.name + ' (' + pkg.files.length + ' file' + (pkg.files.length !== 1 ? 's' : '') + ')';
+      appSel.appendChild(aopt);
+    }
+    _fsmScanData = { dir: data.dir, totalFiles: data.totalFiles, packages: data.packages };
+
+    meta.textContent = data.files.length + ' of ' + data.totalFiles + ' log file(s) match pkg filter';
+    appMeta.textContent = data.packages.length + ' of ' + data.totalApps + ' app(s) match filter';
+  } catch(e) {
+    meta.textContent = 'Filter error: ' + e.message;
+  }
+}
+
+async function fsmResetLists() {
+  await fsmRefreshLogList();
 }
 
 function fsmOnFileChange() {
   _fsmLogPath = document.getElementById('fsmLogFileSelect').value;
-  fsmCheckReady();
+  // clear app selection so entries source is unambiguous
+  document.getElementById('fsmAppSelect').value = '';
+  _fsmLogEntries = [];
+  if (_fsmLogPath) {
+    var absPath = _fsmLogPath;
+    var meta = document.getElementById('fsmLogMeta');
+    meta.textContent = 'Loading…';
+    api('/api/logs/read?file=' + encodeURIComponent(absPath)).then(function(data) {
+      _fsmLogEntries = data.entries || [];
+      meta.textContent = _fsmLogEntries.length + ' entries loaded from ' + absPath.split('/').pop();
+    }).catch(function(e) {
+      meta.textContent = 'Error loading log: ' + e.message;
+    });
+  }
 }
 
-function fsmHandleDrop(ev) {
-  ev.preventDefault();
-  document.getElementById('fsmDropZone').style.borderColor = 'var(--card-border)';
-  var file = ev.dataTransfer.files[0];
-  if (file) fsmLoadImageFile(file);
-}
+async function fsmLoadAppLogs() {
+  var pkg = document.getElementById('fsmAppSelect').value;
+  if (!pkg || !_fsmScanData) return;
+  var pkgEntry = (_fsmScanData.packages || []).find(function(p) { return p.name === pkg; });
+  if (!pkgEntry) return;
 
-function fsmHandleFileInput(input) {
-  if (input.files[0]) fsmLoadImageFile(input.files[0]);
-}
+  // clear single-file selection so entries source is unambiguous
+  document.getElementById('fsmLogFileSelect').value = '';
+  _fsmLogPath = '';
 
-function fsmLoadImageFile(file) {
-  _fsmImageMime = file.type || 'image/png';
-  var reader = new FileReader();
-  reader.onload = function(e) {
-    var dataUrl = e.target.result;
-    // dataUrl = "data:image/png;base64,XXXX"
-    _fsmImageBase64 = dataUrl.split(',')[1];
-    var preview = document.getElementById('fsmDropPreview');
-    preview.src = dataUrl;
-    preview.style.display = '';
-    document.getElementById('fsmDropLabel').style.display = 'none';
-    fsmCheckReady();
-  };
-  reader.readAsDataURL(file);
-}
-
-function fsmCheckReady() {
-  var ready = _fsmImageBase64 && _fsmLogPath;
-  document.getElementById('fsmAnalyzeBtn').disabled = !ready;
-}
-
-async function runFsmAnalysis() {
-  var statusEl = document.getElementById('fsmAnalyzeStatus');
-  var resultsEl = document.getElementById('fsmResultsBox');
-  var btn = document.getElementById('fsmAnalyzeBtn');
-  btn.disabled = true;
-  statusEl.textContent = 'Sending image to AI for analysis…';
-  resultsEl.innerHTML = '<div style="color:var(--text-muted);">Analyzing…</div>';
-  document.getElementById('fsmKeywordsBox').style.display = 'none';
-
+  var dir = _fsmScanData.dir;
+  var files = pkgEntry.files.map(function(f) { return dir + '/' + f; });
+  var meta = document.getElementById('fsmLogMeta');
+  meta.textContent = 'Loading ' + files.length + ' file(s) for ' + pkg + '…';
   try {
-    var resp = await fetch('/api/fsm/analyze', {
+    var data = await api('/api/logs/multi-read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        imageBase64: _fsmImageBase64,
-        imageMime: _fsmImageMime,
-        logFile: _fsmLogPath
-      })
+      body: JSON.stringify({ files: files }),
     });
-    if (!resp.ok) {
-      var err = await resp.text();
-      throw new Error(err);
-    }
-    var data = await resp.json();
-    statusEl.textContent = 'Done.';
-    btn.disabled = false;
-    fsmRenderResults(data);
+    _fsmLogEntries = data.entries || [];
+    meta.textContent = 'Loaded ' + files.length + ' file(s) for ' + pkg + ' — ' + data.total + ' call(s), ' + data.unique + ' unique';
   } catch(e) {
-    statusEl.textContent = 'Error: ' + e.message;
-    resultsEl.innerHTML = '<div style="color:#ef4444;font-size:.82rem;">' + escHtml(String(e)) + '</div>';
-    btn.disabled = false;
+    meta.textContent = 'Error: ' + e.message;
   }
 }
 
-function fsmRenderResults(data) {
-  // data: { transitions, keywords, perKeyword, sequence, violations, totalEntries }
-  var palette = ['#60a5fa','#f472b6','#34d399','#fbbf24','#a78bfa','#f87171','#38bdf8','#fb923c'];
+// ── FSM Text Model Checker ────────────────────────────────────────────────────
 
-  // ── Keywords panel ──────────────────────────────────────────────────────
-  var kwBox = document.getElementById('fsmKeywordsBox');
-  var kwList = document.getElementById('fsmKeywordsList');
-  kwList.innerHTML = '';
-  for (var i = 0; i < data.transitions.length; i++) {
-    var t = data.transitions[i];
-    var color = palette[i % palette.length];
-    var found = data.perKeyword[i] && data.perKeyword[i].count > 0;
-    var icon = found ? '&#x2713;' : '&#x2717;';
-    var row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:7px;padding:2px 0;';
-    row.innerHTML = '<span style="color:' + color + ';font-weight:700;width:12px;">' + icon + '</span>'
-      + '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + ';flex-shrink:0;"></span>'
-      + '<span style="font-family:monospace;color:' + color + ';flex:1;">' + escHtml(t.method + '(') + '</span>'
-      + '<span style="color:var(--text-muted);font-size:.72rem;">'
-      + escHtml(t.from) + ' &rarr; ' + escHtml(t.to)
-      + '</span>'
-      + '<span style="color:var(--text-muted);font-size:.72rem;margin-left:4px;">'
-      + (data.perKeyword[i] ? data.perKeyword[i].count + 'x' : '') + '</span>';
-    kwList.appendChild(row);
+// Parse FSM model text into {states:string[], transitions:[{from,to,methods:[]}]}
+// Handles:
+//   From: "State Name"
+//   To self: method1(), method2()
+//   To "Target State": method1(), method2(), or method3()
+function parseFsmModelText(text) {
+  var lines = text.split('\\n');
+  var states = [];
+  var transitions = [];
+  var currentFrom = null;
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+
+    // From: "State Name"
+    var fromMatch = line.match(/^From:\\s*"([^"]+)"/i);
+    if (fromMatch) {
+      currentFrom = fromMatch[1].trim();
+      if (states.indexOf(currentFrom) === -1) states.push(currentFrom);
+      continue;
+    }
+
+    if (!currentFrom) continue;
+
+    // To self: methods
+    var selfMatch = line.match(/^To\\s+self:\\s*(.+)$/i);
+    if (selfMatch) {
+      var methods = _parseFsmMethods(selfMatch[1]);
+      transitions.push({ from: currentFrom, to: currentFrom, methods: methods });
+      continue;
+    }
+
+    // To "Target State": methods
+    var toMatch = line.match(/^To\\s+"([^"]+)":\\s*(.+)$/i);
+    if (toMatch) {
+      var toState = toMatch[1].trim();
+      if (states.indexOf(toState) === -1) states.push(toState);
+      var methods2 = _parseFsmMethods(toMatch[2]);
+      transitions.push({ from: currentFrom, to: toState, methods: methods2 });
+      continue;
+    }
   }
-  kwBox.style.display = '';
 
-  // ── Results panel ───────────────────────────────────────────────────────
-  var el = document.getElementById('fsmResultsBox');
-  var hitKw = data.perKeyword.filter(function(pk) { return pk.count > 0; }).length;
-  var totalKw = data.transitions.length;
-  var summaryColor = hitKw === totalKw ? '#22c55e' : hitKw > 0 ? '#f59e0b' : '#ef4444';
-  var summaryLabel = hitKw === totalKw ? 'PASS' : hitKw > 0 ? 'PARTIAL' : 'FAIL';
+  return { states: states, transitions: transitions };
+}
 
-  var html = '<div style="font-size:.88rem;font-weight:700;color:' + summaryColor + ';margin-bottom:12px;padding:8px 12px;background:var(--surface);border:1px solid ' + summaryColor + ';border-radius:6px;">'
-    + summaryLabel + ' &mdash; ' + hitKw + ' / ' + totalKw + ' transitions observed in log</div>';
+// Extract method names from a comma/or-separated list like "attachInfo(), build(), or onAdLoaded()"
+function _parseFsmMethods(str) {
+  return str.split(/,|\\bor\\b/i)
+    .map(function(s) { return s.trim().replace(/\\(\\)$/, '').trim(); })
+    .filter(function(s) { return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s); });
+}
 
-  // Violations section
-  if (data.violations && data.violations.length > 0) {
-    html += '<div style="font-weight:700;font-size:.8rem;color:#ef4444;margin-bottom:6px;letter-spacing:.04em;">VIOLATIONS (' + data.violations.length + ')</div>';
-    html += '<div style="margin-bottom:16px;">';
-    for (var vi = 0; vi < data.violations.length; vi++) {
-      var v = data.violations[vi];
-      html += '<div style="padding:6px 10px;background:#7f1d1d22;border:1px solid #ef444444;border-radius:6px;margin-bottom:6px;font-size:.78rem;">'
-        + '<span style="color:#ef4444;font-weight:700;">' + escHtml(v.type) + '</span>'
-        + '<span style="color:var(--text-muted);"> &mdash; </span>'
+function runFsmTextCheck() {
+  var statusEl = document.getElementById('fsmTextCheckStatus');
+  var resultsEl = document.getElementById('fsmTextResults');
+  var modelText = document.getElementById('fsmModelText').value.trim();
+
+  if (!modelText) {
+    statusEl.textContent = 'Paste an FSM model first.';
+    return;
+  }
+
+  // Determine entries source: FSM tab (file or app) > Log Viewer app mode
+  var allEntries = [];
+  if (_fsmLogEntries.length) {
+    allEntries = _fsmLogEntries;
+  } else if (_appLogEntries.length) {
+    allEntries = _appLogEntries;
+  } else {
+    statusEl.textContent = 'Load a log file or select an app in the FSM Analyzer first.';
+    return;
+  }
+
+  // Apply pkg filter: only consider entries whose className matches all pkg patterns (OR within patterns)
+  var pkgPatterns = fsmReadPkgFilters();
+  var entries = pkgPatterns.length
+    ? allEntries.filter(function(e) {
+        var cls = (e.className || e.sig || '').toLowerCase();
+        return pkgPatterns.some(function(p) { return cls.indexOf(p) !== -1; });
+      })
+    : allEntries;
+
+  if (!entries.length) {
+    resultsEl.innerHTML = '<div style="color:#f59e0b;padding:12px;">No entries match the package filter. Adjust the filter or load different logs.</div>';
+    return;
+  }
+
+  statusEl.textContent = '';
+
+  var model;
+  try {
+    model = parseFsmModelText(modelText);
+  } catch(e) {
+    statusEl.textContent = 'Parse error: ' + e.message;
+    return;
+  }
+
+  if (!model.transitions.length) {
+    resultsEl.innerHTML = '<div style="color:#ef4444;">No transitions parsed. Check model format.</div>';
+    return;
+  }
+
+  // Build flat list of {method(lower), from, to} for fast lookup
+  var flatTransitions = [];
+  model.transitions.forEach(function(t) {
+    t.methods.forEach(function(m) {
+      flatTransitions.push({ method: m, methodLow: m.toLowerCase(), from: t.from, to: t.to });
+    });
+  });
+
+  // All unique method names to search for
+  var allMethods = flatTransitions.map(function(t) { return t.methodLow; });
+  var uniqueMethods = allMethods.filter(function(v, i, a) { return a.indexOf(v) === i; });
+
+  // Filter entries to only those matching any FSM method
+  var matchingEntries = entries.filter(function(e) {
+    var mn = (e.methodName || '').toLowerCase();
+    return uniqueMethods.some(function(m) { return mn === m || mn.indexOf(m) !== -1; });
+  });
+
+  // Walk entries in order, track current FSM state
+  var currentState = model.states[0] || null;
+  var violations = [];
+  var stateHistory = [{ state: currentState, entryIdx: -1, reason: 'initial' }];
+  var sequence = []; // [{entry, method, from, to, violation, violDesc}]
+
+  for (var i = 0; i < matchingEntries.length; i++) {
+    var e = matchingEntries[i];
+    var mn = (e.methodName || '').toLowerCase();
+
+    // Find matching flat transitions from current state that match this method
+    var validTransitions = flatTransitions.filter(function(t) {
+      return t.from === currentState && t.methodLow === mn;
+    });
+
+    // Also find any valid transition from ANY state (for detecting wrong-state calls)
+    var anyTransitions = flatTransitions.filter(function(t) {
+      return t.methodLow === mn;
+    });
+
+    if (anyTransitions.length === 0) continue; // not an FSM method
+
+    var row = { entry: e, method: e.methodName || mn, from: currentState, to: null, violation: false, violDesc: '' };
+
+    if (validTransitions.length > 0) {
+      // Valid transition: take the first matching one
+      var taken = validTransitions[0];
+      row.to = taken.to;
+      currentState = taken.to;
+      stateHistory.push({ state: currentState, entryIdx: i, reason: e.methodName });
+    } else {
+      // Method is an FSM method but not valid from currentState — violation
+      row.violation = true;
+      var expectedFroms = anyTransitions.map(function(t) { return '"' + t.from + '"'; })
+        .filter(function(v, i2, a) { return a.indexOf(v) === i2; });
+      row.violDesc = e.methodName + '() called in state "' + currentState + '" — valid only from ' + expectedFroms.join(' or ');
+      row.to = null;
+      violations.push({ type: 'Wrong state', detail: row.violDesc });
+    }
+    sequence.push(row);
+  }
+
+  // Count per-method occurrences
+  var methodCounts = {};
+  uniqueMethods.forEach(function(m) {
+    methodCounts[m] = entries.filter(function(e) {
+      var mn = (e.methodName || '').toLowerCase();
+      return mn === m || mn.indexOf(m) !== -1;
+    }).length;
+  });
+
+  fsmRenderTextCheckResults({
+    model: model,
+    sequence: sequence,
+    violations: violations,
+    methodCounts: methodCounts,
+    totalEntries: entries.length,
+    totalRaw: allEntries.length,
+    pkgFiltered: pkgPatterns.length > 0,
+    finalState: currentState,
+  });
+}
+
+function fsmRenderTextCheckResults(data) {
+  var el = document.getElementById('fsmTextResults');
+  var palette = ['#60a5fa','#f472b6','#34d399','#fbbf24','#a78bfa','#f87171','#38bdf8','#fb923c'];
+  var model = data.model;
+  var violations = data.violations;
+
+  // Summary
+  var summaryColor = violations.length === 0 ? '#22c55e' : '#ef4444';
+  var summaryLabel = violations.length === 0 ? 'PASS' : 'VIOLATIONS DETECTED';
+  var html = '<div style="font-size:.88rem;font-weight:700;color:' + summaryColor
+    + ';margin-bottom:12px;padding:8px 12px;background:var(--surface);border:1px solid '
+    + summaryColor + ';border-radius:6px;">'
+    + summaryLabel + ' &mdash; ' + violations.length + ' violation(s) &mdash; '
+    + data.sequence.length + ' FSM events in ' + data.totalEntries + ' entries'
+    + (data.pkgFiltered ? ' (filtered from ' + data.totalRaw + ')' : '')
+    + '</div>';
+
+  // Final state
+  html += '<div style="font-size:.8rem;margin-bottom:12px;color:var(--text);">Final state: <strong style="color:var(--accent-no-ads);">'
+    + escHtml(data.finalState || '—') + '</strong></div>';
+
+  // States defined
+  html += '<div style="font-size:.78rem;font-weight:700;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em;">STATES (' + model.states.length + ')</div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px;">';
+  model.states.forEach(function(s, i) {
+    var c = palette[i % palette.length];
+    html += '<span style="padding:2px 8px;border-radius:4px;border:1px solid ' + c + '55;background:' + c + '18;color:' + c + ';font-size:.73rem;font-family:monospace;">'
+      + escHtml(s) + '</span>';
+  });
+  html += '</div>';
+
+  // Violations
+  if (violations.length > 0) {
+    html += '<div style="font-weight:700;font-size:.78rem;color:#ef4444;margin-bottom:6px;letter-spacing:.04em;">VIOLATIONS (' + violations.length + ')</div>';
+    html += '<div style="margin-bottom:14px;">';
+    violations.forEach(function(v) {
+      html += '<div style="padding:6px 10px;background:#7f1d1d22;border:1px solid #ef444444;border-radius:6px;margin-bottom:5px;font-size:.75rem;">'
+        + '<span style="color:#ef4444;font-weight:700;">' + escHtml(v.type) + ':</span> '
         + '<span style="color:var(--text);font-family:monospace;">' + escHtml(v.detail) + '</span>'
         + '</div>';
-    }
+    });
     html += '</div>';
-  } else if (hitKw > 0) {
-    html += '<div style="color:#22c55e;font-size:.82rem;margin-bottom:16px;">No sequence violations detected.</div>';
   }
 
-  // Call sequence
-  var seqRows = data.sequence || [];
-  html += '<div style="font-size:.8rem;font-weight:700;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em;">CALL SEQUENCE (' + seqRows.length + ' match' + (seqRows.length !== 1 ? 'es' : '') + ' of ' + data.totalEntries + ' total)</div>';
-  html += '<div style="font-family:monospace;font-size:.75rem;background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;overflow-y:auto;max-height:420px;">';
-
-  if (seqRows.length === 0) {
-    html += '<div style="padding:20px;color:var(--text-muted);text-align:center;">None of the FSM transition methods were found in this log.</div>';
+  // Sequence
+  html += '<div style="font-size:.78rem;font-weight:700;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em;">EVENT SEQUENCE (' + data.sequence.length + ')</div>';
+  html += '<div style="font-family:monospace;font-size:.74rem;background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;overflow-y:auto;max-height:320px;">';
+  if (data.sequence.length === 0) {
+    html += '<div style="padding:16px;color:var(--text-muted);text-align:center;">No FSM methods found in log entries.</div>';
   }
-  for (var si = 0; si < seqRows.length; si++) {
-    var row = seqRows[si];
+  data.sequence.forEach(function(row, idx) {
     var e = row.entry;
-    var kwIdxs = row.kwIndices;
-    var rowColor = palette[kwIdxs[0] % palette.length];
     var isViolation = row.violation;
-
-    var entryText = e.className
-      ? e.className + ' -> ' + e.returnType + ' ' + e.methodName + '(' + e.args + ')'
-      : e.sig;
-
-    var highlighted = escHtml(entryText);
-    for (var hi = 0; hi < kwIdxs.length; hi++) {
-      var t2 = data.transitions[kwIdxs[hi]];
-      if (!t2) continue;
-      var mname = t2.method.replace(new RegExp('[.*+?^$' + '{}()|[\\\\]\\\\\\\\]', 'g'), function(c) { return '\\\\' + c; });
-      var hcolor = palette[kwIdxs[hi] % palette.length];
-      highlighted = highlighted.replace(new RegExp('(' + mname + ')', 'gi'),
-        function(_, m) { return '<mark style="background:' + hcolor + '33;color:' + hcolor + ';border-radius:2px;padding:0 1px;font-weight:bold;">' + m + '</mark>'; });
-    }
-
-    var badges = kwIdxs.map(function(idx) {
-      var t3 = data.transitions[idx];
-      var c = palette[idx % palette.length];
-      return '<span style="font-size:.67rem;padding:0 4px;border-radius:3px;background:' + c + '22;color:' + c + ';border:1px solid ' + c + '55;margin-right:3px;">'
-        + escHtml(t3 ? t3.method : '') + '</span>';
-    }).join('');
-
-    var violBadge = isViolation
-      ? '<span style="font-size:.67rem;padding:0 4px;border-radius:3px;background:#ef444422;color:#ef4444;border:1px solid #ef444455;margin-right:3px;">VIOLATION</span>'
-      : '';
-
     var rowBg = isViolation ? 'background:#7f1d1d18;' : '';
-    html += '<div style="display:flex;gap:10px;align-items:baseline;padding:5px 12px;border-bottom:1px solid rgba(255,255,255,.04);border-left:3px solid ' + (isViolation ? '#ef4444' : rowColor) + ';' + rowBg + '">'
-      + '<span style="color:var(--text-muted);flex-shrink:0;min-width:28px;text-align:right;font-size:.7rem;">#' + (si + 1) + '</span>'
+    var borderColor = isViolation ? '#ef4444' : '#22c55e';
+    var entryText = e.className
+      ? e.className + ' -> ' + (e.returnType || '') + ' ' + (e.methodName || '') + '(' + (e.args || '') + ')'
+      : (e.sig || '');
+    var stateArrow = row.to
+      ? escHtml(row.from) + ' &rarr; <strong>' + escHtml(row.to) + '</strong>'
+      : '<span style="color:#ef4444;">' + escHtml(row.from) + ' (invalid)</span>';
+    html += '<div style="display:flex;gap:10px;align-items:baseline;padding:5px 12px;border-bottom:1px solid rgba(255,255,255,.04);border-left:3px solid ' + borderColor + ';' + rowBg + '">'
+      + '<span style="color:var(--text-muted);flex-shrink:0;min-width:24px;text-align:right;font-size:.7rem;">#' + (idx + 1) + '</span>'
       + '<div style="min-width:0;flex:1;">'
-      + '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(entryText) + '">' + highlighted + '</div>'
-      + '<div style="margin-top:2px;">' + violBadge + badges + '</div>'
+      + '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(entryText) + '">'
+      + (isViolation ? '<span style="color:#ef4444;font-weight:700;margin-right:4px;">⚠</span>' : '')
+      + '<span style="color:' + (isViolation ? '#ef4444' : '#34d399') + ';font-weight:700;">' + escHtml(row.method) + '()</span>'
+      + ' <span style="color:var(--text-muted);font-size:.7rem;">' + escHtml(e.className || '') + '</span>'
+      + '</div>'
+      + '<div style="font-size:.7rem;color:var(--text-muted);margin-top:1px;">' + stateArrow + '</div>'
+      + (isViolation ? '<div style="font-size:.7rem;color:#ef4444;margin-top:1px;">' + escHtml(row.violDesc) + '</div>' : '')
       + '</div></div>';
-  }
+  });
   html += '</div>';
+
   el.innerHTML = html;
 }
 

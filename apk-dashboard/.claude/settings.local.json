@@ -53,7 +53,9 @@
       "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r9.html)",
       "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r10.html)",
       "Bash(awk '/^<script>/{p=1;next} /^<\\\\/script>/{p=0;next} p{print}' /tmp/r11.html)",
-      "Bash(awk '/<script[^>]*>/{p=1;next} /<\\\\/script>/{p=0} p')"
+      "Bash(awk '/<script[^>]*>/{p=1;next} /<\\\\/script>/{p=0} p')",
+      "Bash(cp /home/sean/Documents/Projects/MADPro/apk-dashboard/playstore.js /home/sean/Documents/Projects/MADPro/command-line-tool/lib/playstore.js)",
+      "Bash(cp /home/sean/Documents/Projects/MADPro/apk-dashboard/apk_inspector.js /home/sean/Documents/Projects/MADPro/command-line-tool/lib/apk_inspector.js)"
     ]
   }
 }

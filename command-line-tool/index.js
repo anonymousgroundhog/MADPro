@@ -20,6 +20,7 @@
  *   instrument         Install, run, capture logcat, uninstall
  *   uninstall          Bulk uninstall by category
  *   uninstall-playstore  Uninstall all Play Store apps on device
+ *   kanban             Scan APK directory and show ads/no-ads Kanban board
  */
 
 const { Command } = require("commander");
@@ -42,5 +43,6 @@ require("./commands/compile").register(program);
 require("./commands/inject").register(program);
 require("./commands/instrument").register(program);
 require("./commands/uninstall").register(program);
+require("./commands/kanban").register(program);
 
 program.parse(process.argv);

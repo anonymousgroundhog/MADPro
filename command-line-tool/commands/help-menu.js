@@ -344,6 +344,51 @@ USAGE
     madpro uninstall-playstore -d emulator-5554
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  kanban  <dir>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Scan a directory of APKs, enrich each app with Play Store metadata
+  (ads presence, rating, downloads, category, store URL), and write
+  results to a CSV file — one row per APK.
+
+  For each unique package name found:
+    1. Look up the app on Google Play Store (scrape, no key required)
+    2. If not found on store → fall back to static APK inspection
+       to detect ad SDKs directly from the DEX bytecode
+    3. Append a row to the CSV immediately (low memory footprint)
+
+  CSV columns:
+    package, appName, hasAds, adSdks, rating, downloads, category,
+    stillOnStore, storeUrl, scanMethod, primaryApk
+
+  scanMethod values:
+    play-store        metadata from Play Store scrape
+    apk-scan          APK not on store; ads detected from DEX
+    apk-scan-failed   APK not on store and inspection failed
+
+  Options:
+    -o, --out <file>   Output CSV path              [<dir>/kanban-<ts>.csv]
+    --no-store         Skip Play Store lookup; use static APK scan only
+
+  Examples:
+    # Enrich all APKs in ./apks, write CSV next to them
+    madpro kanban ./apks
+
+    # Write CSV to a specific path
+    madpro kanban ./apks -o ./results/kanban.csv
+
+    # Offline mode — no network, APK inspection only
+    madpro kanban ./apks --no-store
+
+    # Works on nested APK collections (e.g. from download command output)
+    madpro kanban /media/sean/APKs/SOCIAL
+
+  Notes:
+    - Split/helper APKs (no valid package name) are skipped automatically.
+    - Concurrency is capped at 1 to avoid memory pressure from large DEX
+      buffers; inspection runs in a subprocess so buffers are freed promptly.
+    - CSV is written row-by-row; safe to interrupt (partial results kept).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   TYPICAL WORKFLOW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

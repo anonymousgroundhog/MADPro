@@ -10,6 +10,7 @@ const { spawnSync } = require("child_process");
 const { findBin, findAndroidPlatforms, findBuildTool, JAR_LIBS_DIR, JAVA_SRC_DIR, INJECTOR_CLASS } = require("../lib/tools");
 const { run } = require("../lib/runner");
 const { scanApks } = require("../lib/scanner");
+const { extractXapksInDir, normalizeApksInDir } = require("../lib/apk-utils");
 
 // Simple glob match: supports * (any segment chars) and ** (any path chars).
 function matchGlob(glob, str) {
@@ -121,6 +122,7 @@ function register(program) {
     .command("inject")
     .description("Inject logging into APKs via LogInjector (Soot)")
     .argument("<apk-dir>", "Directory containing APKs to inject")
+    .option("-b, --backend <name>", "apkpure | google-play | androzoo (scopes scan to backend subdirectory; apkpure also extracts XAPKs first)")
     .option("-o, --output <dir>", "Output directory for injected APKs", "./injected")
     .option("-p, --patterns <csv>", "Comma-separated method class filter patterns passed to LogInjector (empty = all)", "")
     .option("--pkg-filter <globs>", "Comma-separated glob patterns to select which APKs to inject by path/label (e.g. '*/SOCIAL/*,*/FINANCE/*')", "")
@@ -131,6 +133,26 @@ function register(program) {
       const patterns   = opts.patterns ? opts.patterns.split(",").map(s => s.trim()).filter(Boolean) : [];
       const pkgFilters = opts.pkgFilter ? opts.pkgFilter.split(",").map(s => s.trim()).filter(Boolean) : [];
       const injectAll  = opts.injectAll;
+      const backend    = opts.backend || null;
+
+      // For apkpure: extract XAPKs across all category subdirs before scanning
+      if (backend === "apkpure") {
+        const resolvedApkDir = path.resolve(apkDir);
+        for (const entry of fs.readdirSync(resolvedApkDir, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          const catDir = path.join(resolvedApkDir, entry.name, "apkpure");
+          if (!fs.existsSync(catDir)) continue;
+          extractXapksInDir(catDir);
+          for (const sub of fs.readdirSync(catDir, { withFileTypes: true })) {
+            if (!sub.isDirectory()) continue;
+            const pkgDir = path.join(catDir, sub.name);
+            extractXapksInDir(pkgDir);
+            normalizeApksInDir(pkgDir);
+          }
+        }
+      }
+
+      const scanRoot = path.resolve(apkDir);
 
       // 1. Compile
       const compiled = await ensureCompiled(opts.forceCompile);
@@ -146,8 +168,8 @@ function register(program) {
 
       // 3. Scan APKs (skip aapt — inject only needs file paths, not metadata)
       let targets;
-      try { targets = scanApks(apkDir, { skipAapt: true }); }
-      catch (err) { console.error(`ERROR scanning ${apkDir}: ${err.message}`); process.exit(1); }
+      try { targets = scanApks(scanRoot, { skipAapt: true }); }
+      catch (err) { console.error(`ERROR scanning ${scanRoot}: ${err.message}`); process.exit(1); }
 
       if (!targets.length) {
         console.log("No APKs found in the selected directory.");
@@ -225,4 +247,4 @@ function register(program) {
     });
 }
 
-module.exports = { register, ensureCompiled };
+module.exports = { register, ensureCompiled, signOutputApks };

@@ -5,12 +5,14 @@
 
 const path = require("path");
 const fs = require("fs");
-const { findBin, findAdb } = require("../lib/tools");
+const readline = require("readline");
+const { findBin, findAdb, findAndroidPlatforms, JAR_LIBS_DIR, JAVA_SRC_DIR } = require("../lib/tools");
 const { run } = require("../lib/runner");
 const { normalizeApksInDir, extractXapksInDir } = require("../lib/apk-utils");
 const SEEDS = require("../lib/seeds");
-
-const ALL_CATEGORIES = Object.keys(SEEDS);
+const { ALL_CATEGORY_IDS } = require("../lib/play-categories");
+const { ensureCompiled, signOutputApks } = require("./inject");
+const { scanApks } = require("../lib/scanner");
 
 async function fetchTopPackages(catId, count) {
   // Lightweight scrape — mirrors playstore.js in the dashboard.
@@ -57,7 +59,12 @@ async function downloadApkPure(categories, count, outputDir, timeoutMs) {
     console.log(`\n--- Category: ${catId} (${packages.length} app(s)) ---`);
 
     const catDir = path.join(outputDir, catId, "apkpure");
-    fs.mkdirSync(catDir, { recursive: true });
+    try {
+      fs.mkdirSync(catDir, { recursive: true });
+    } catch (err) {
+      console.error(`  [ERROR] Cannot create category dir ${catDir}: ${err.message}`);
+      continue;
+    }
 
     for (const pkg of packages) {
       const pkgDir = path.join(catDir, pkg);
@@ -66,7 +73,12 @@ async function downloadApkPure(categories, count, outputDir, timeoutMs) {
         continue;
       }
       console.log(`  Downloading: ${pkg}`);
-      fs.mkdirSync(pkgDir, { recursive: true });
+      try {
+        fs.mkdirSync(pkgDir, { recursive: true });
+      } catch (err) {
+        console.error(`  [ERROR] Cannot create dir for ${pkg}: ${err.message}`);
+        continue;
+      }
       const ok = await run(apkeepBin, ["-a", pkg, "-d", "apk-pure", pkgDir], { timeoutMs });
       console.log(ok ? `  [OK] ${pkg}` : `  [FAILED] ${pkg}`);
     }
@@ -163,6 +175,46 @@ async function downloadGPlay(categories, count, outputDir, deviceSerial, timeout
   }
 }
 
+function parseCsvColumn(csvPath, column) {
+  return new Promise((resolve, reject) => {
+    const hashes = [];
+    let headers = null;
+    let colIndex = -1;
+    const isNumeric = /^\d+$/.test(String(column));
+
+    const rl = readline.createInterface({
+      input: fs.createReadStream(csvPath),
+      crlfDelay: Infinity,
+    });
+
+    rl.on("line", (line) => {
+      if (!line.trim()) return;
+      const cols = line.split(",").map(s => s.trim().replace(/^"|"$/g, ""));
+      if (headers === null) {
+        headers = cols;
+        if (isNumeric) {
+          colIndex = parseInt(column, 10);
+        } else {
+          colIndex = headers.findIndex(h => h.toLowerCase() === String(column).toLowerCase());
+          if (colIndex === -1) {
+            rl.close();
+            reject(new Error(`Column "${column}" not found in CSV. Headers: ${headers.join(", ")}`));
+            return;
+          }
+        }
+        return;
+      }
+      const val = cols[colIndex];
+      if (val && /^[a-f0-9]{64}$/i.test(val.trim())) hashes.push(val.trim().toLowerCase());
+    });
+
+    rl.on("close", () => resolve(hashes));
+    rl.on("error", reject);
+  });
+}
+
+const ANDROZOO_CONCURRENCY = 20;
+
 async function downloadAndrozoo(outputDir, apiKey, sha256Hashes, timeoutMs) {
   const androzooDir = path.join(outputDir, "androzoo");
   fs.mkdirSync(androzooDir, { recursive: true });
@@ -175,30 +227,30 @@ async function downloadAndrozoo(outputDir, apiKey, sha256Hashes, timeoutMs) {
   const apiUrl = "https://androzoo.uni.lu/api/download";
   let successCount = 0;
   let failCount = 0;
+  const total = sha256Hashes.length;
 
-  for (let i = 0; i < sha256Hashes.length; i++) {
-    const sha256 = sha256Hashes[i].trim().toLowerCase();
+  async function downloadOne(sha256, index) {
     if (!/^[a-f0-9]{64}$/.test(sha256)) {
       console.log(`  [SKIP] Invalid SHA256: ${sha256}`);
       failCount++;
-      continue;
+      return;
     }
 
     const outputFile = path.join(androzooDir, `${sha256}.apk`);
     if (fs.existsSync(outputFile)) {
       console.log(`  [SKIP] ${sha256.substring(0, 8)}... (already exists)`);
       successCount++;
-      continue;
+      return;
     }
 
-    console.log(`Downloading [${i + 1}/${sha256Hashes.length}]: ${sha256.substring(0, 8)}...`);
+    console.log(`Downloading [${index + 1}/${total}]: ${sha256.substring(0, 8)}...`);
     const requestUrl = `${apiUrl}?apikey=${encodeURIComponent(apiKey)}&sha256=${encodeURIComponent(sha256)}`;
-    const ok = await run(curlBin, ["-s", "-w", "\n%{http_code}", "-H", "User-Agent: Mozilla/5.0 (Linux; Android 11)", "-o", outputFile, requestUrl], { timeoutMs });
+    await run(curlBin, ["-s", "-w", "\n%{http_code}", "-H", "User-Agent: Mozilla/5.0 (Linux; Android 11)", "-o", outputFile, requestUrl], { timeoutMs });
 
     if (!fs.existsSync(outputFile)) {
       console.log(`  [FAILED] ${sha256.substring(0, 8)}... (no response)`);
       failCount++;
-      continue;
+      return;
     }
 
     const fileSize = fs.statSync(outputFile).size;
@@ -218,7 +270,73 @@ async function downloadAndrozoo(outputDir, apiKey, sha256Hashes, timeoutMs) {
     }
   }
 
+  for (let i = 0; i < total; i += ANDROZOO_CONCURRENCY) {
+    const batch = sha256Hashes.slice(i, i + ANDROZOO_CONCURRENCY);
+    await Promise.all(batch.map((sha256, j) => downloadOne(sha256.trim().toLowerCase(), i + j)));
+  }
+
   console.log(`\n--- Summary: ${successCount} successful, ${failCount} failed ---`);
+}
+
+async function injectApksInDir(sourceDir, injectOutputDir, injectOpts) {
+  const { patterns, injectAll, forceCompile } = injectOpts;
+
+  const compiled = await ensureCompiled(forceCompile);
+  if (!compiled) { console.error("[ERROR] Inject: compilation failed — skipping injection."); return; }
+
+  const platforms = findAndroidPlatforms();
+  if (!platforms) { console.error("[ERROR] Inject: Android platforms not found — skipping injection."); return; }
+
+  let targets;
+  try { targets = scanApks(sourceDir, { skipAapt: true }); }
+  catch (err) { console.error(`[ERROR] Inject: scan failed — ${err.message}`); return; }
+
+  if (!targets.length) { console.log("[INFO] Inject: no APKs found to inject."); return; }
+
+  const jars = fs.readdirSync(JAR_LIBS_DIR)
+    .filter(f => f.endsWith(".jar"))
+    .map(f => path.join(JAR_LIBS_DIR, f));
+  const cp = [JAVA_SRC_DIR, ...jars].join(":");
+
+  fs.mkdirSync(injectOutputDir, { recursive: true });
+  console.log(`\n--- Injecting ${targets.length} APK(s) → ${injectOutputDir} ---`);
+
+  const javaBin = findBin("java") || "java";
+
+  for (const target of targets) {
+    console.log(`\n  Injecting: ${target.label}`);
+    const appOutDir = path.join(injectOutputDir, target.label.replace(/[^a-zA-Z0-9_-]/g, "_"));
+    fs.mkdirSync(appOutDir, { recursive: true });
+
+    const filterCsv = patterns.join(",");
+    const javaArgs = [
+      "-Xmx4g", "-Xms512m", "-XX:+UseG1GC",
+      "-XX:MaxGCPauseMillis=200", "-XX:SoftRefLRUPolicyMSPerMB=0",
+      "-XX:StringTableSize=1000003",
+      "-cp", cp, "LogInjector",
+    ];
+    if (injectAll) javaArgs.push("--inject-all");
+    javaArgs.push(platforms, target.primaryApk, appOutDir);
+    if (filterCsv) javaArgs.push(filterCsv);
+
+    const ok = await run(javaBin, javaArgs, {
+      timeoutMs: 10 * 60 * 1000,
+      stuckMs:    2 * 60 * 1000,
+      filterSoot: true,
+    });
+
+    if (ok) {
+      console.log(`  [OK] ${target.label}`);
+      const splitLibs = target.apkFiles.filter(f => f !== target.primaryApk);
+      for (const lib of splitLibs) {
+        const dest = path.join(appOutDir, path.basename(lib));
+        try { fs.copyFileSync(lib, dest); } catch {}
+      }
+      await signOutputApks(appOutDir);
+    } else {
+      console.log(`  [FAILED] ${target.label}`);
+    }
+  }
 }
 
 function register(program) {
@@ -226,32 +344,81 @@ function register(program) {
     .command("download")
     .description("Download APKs from ApkPure, Google Play, or Androzoo")
     .option("-b, --backend <name>", "apkpure | google-play | androzoo", "apkpure")
-    .option("-c, --categories <list>", `Comma-separated categories. Available: ${ALL_CATEGORIES.join(", ")}`, "GAME_ACTION")
+    .option("-c, --categories <list>", "Comma-separated category IDs (see: madpro categories)", "GAME_ACTION")
+    .option("--all-categories", "Download from every Google Play category (overrides -c)")
     .option("-n, --count <n>", "Apps per category", "5")
     .option("-o, --output <dir>", "Output directory", "./apks")
     .option("-d, --device <serial>", "ADB device serial (google-play only)")
     .option("-t, --timeout <ms>", "Per-download timeout in ms (0=none)", "0")
     .option("--api-key <key>", "Androzoo API key")
     .option("--sha256 <hashes>", "Comma-separated SHA256 hashes (Androzoo)")
+    .option("--csv <file>", "CSV file containing SHA256 hashes (Androzoo)")
+    .option("--csv-column <col>", "Column name or 0-based index for SHA256 hashes in CSV", "sha256")
+    .option("--inject <dir>", "After download, inject APKs and write output to this directory")
+    .option("-p, --patterns <csv>", "Comma-separated method class filter patterns for injection (empty = all)", "")
+    .option("--inject-all", "Inject all methods (no filter)", false)
+    .option("--force-compile", "Force recompile LogInjector.java before injecting", false)
     .action(async opts => {
       const backend    = opts.backend;
-      const categories = opts.categories.split(",").map(s => s.trim().toUpperCase());
+      const categories = opts.allCategories
+        ? ALL_CATEGORY_IDS
+        : opts.categories.split(",").map(s => s.trim().toUpperCase());
       const count      = parseInt(opts.count, 10);
       const outputDir  = path.resolve(opts.output);
       const timeoutMs  = parseInt(opts.timeout, 10);
+      const injectDir  = opts.inject ? path.resolve(opts.inject) : null;
+      const injectOpts = {
+        patterns:     opts.patterns ? opts.patterns.split(",").map(s => s.trim()).filter(Boolean) : [],
+        injectAll:    opts.injectAll,
+        forceCompile: opts.forceCompile,
+      };
 
       console.log(`\nBackend : ${backend}`);
       console.log(`Output  : ${outputDir}`);
+      if (injectDir) console.log(`Inject  : ${injectDir}`);
 
       if (backend === "androzoo") {
         if (!opts.apiKey) { console.error("ERROR: --api-key required for androzoo"); process.exit(1); }
-        const hashes = (opts.sha256 || "").split(",").map(s => s.trim()).filter(Boolean);
-        if (!hashes.length) { console.error("ERROR: --sha256 required for androzoo"); process.exit(1); }
+        let hashes = (opts.sha256 || "").split(",").map(s => s.trim()).filter(Boolean);
+        if (opts.csv) {
+          const csvPath = path.resolve(opts.csv);
+          if (!fs.existsSync(csvPath)) { console.error(`ERROR: CSV file not found: ${csvPath}`); process.exit(1); }
+          console.log(`Reading SHA256 hashes from CSV: ${csvPath} (column: ${opts.csvColumn})`);
+          const csvHashes = await parseCsvColumn(csvPath, opts.csvColumn);
+          console.log(`Found ${csvHashes.length} valid SHA256(s) in CSV`);
+          if (hashes.length === 0) {
+            hashes = csvHashes;
+          } else {
+            const seen = new Set(hashes);
+            for (const h of csvHashes) { if (!seen.has(h)) { seen.add(h); hashes.push(h); } }
+          }
+        }
+        if (!hashes.length) { console.error("ERROR: --sha256 or --csv required for androzoo"); process.exit(1); }
         await downloadAndrozoo(outputDir, opts.apiKey, hashes, timeoutMs);
+        if (injectDir) {
+          const androzooDir = path.join(outputDir, "androzoo");
+          await injectApksInDir(androzooDir, injectDir, injectOpts);
+        }
       } else if (backend === "google-play") {
         await downloadGPlay(categories, count, outputDir, opts.device, timeoutMs);
+        if (injectDir) {
+          for (const catId of categories) {
+            const catDir = path.join(outputDir, catId, "google_play");
+            if (!fs.existsSync(catDir)) continue;
+            const catInjectDir = path.join(injectDir, catId, "google_play");
+            await injectApksInDir(catDir, catInjectDir, injectOpts);
+          }
+        }
       } else {
         await downloadApkPure(categories, count, outputDir, timeoutMs);
+        if (injectDir) {
+          for (const catId of categories) {
+            const catDir = path.join(outputDir, catId, "apkpure");
+            if (!fs.existsSync(catDir)) continue;
+            const catInjectDir = path.join(injectDir, catId, "apkpure");
+            await injectApksInDir(catDir, catInjectDir, injectOpts);
+          }
+        }
       }
 
       console.log("\nDone.");

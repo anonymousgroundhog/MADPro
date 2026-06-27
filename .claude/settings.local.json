@@ -138,7 +138,18 @@
       "Bash(bash start-emulator.sh Research_36)",
       "Bash(echo \"Script PID: $!\")",
       "Bash(grep -qE \"\\\\[OK\\\\] Emulator ready|ERROR\" /tmp/shell_emu.log)",
-      "Bash(adb devices *)"
+      "Bash(adb devices *)",
+      "Bash(unzip --help)",
+      "Bash(unzip -q -o \"/media/sean/My Passport/APK-Files-Collection/SHOPPING/apkpure/com.ebay.mobile/com.ebay.mobile.xapk.zip\" -d \"/media/sean/My Passport/APK-Files-Collection/SHOPPING/apkpure/com.ebay.mobile/com.ebay.mobile\")",
+      "Bash(xxd \"/media/sean/My Passport/APK-Files-Collection/SHOPPING/apkpure/com.ebay.mobile/com.ebay.mobile.xapk.zip\")",
+      "Bash(xxd \"/media/sean/My Passport/APK-Files-Collection/EVENTS/apkpure/com.xogrp.planner/com.xogrp.planner.xapk.zip\")",
+      "Bash(xxd \"/media/sean/My Passport/APK-Files-Collection/EVENTS/apkpure/com.xogrp.planner/com.xogrp.planner.xapk\")",
+      "Bash(zipinfo \"/media/sean/My Passport/APK-Files-Collection/EVENTS/apkpure/com.xogrp.planner/com.xogrp.planner.xapk.zip\")",
+      "Bash(7z x *)",
+      "Read(//media/sean/My Passport/APK-Files-Collection/FINANCE/apkpure/com.konylabs.capitalone/**)",
+      "Bash(xxd \"/media/sean/My Passport/APK-Files-Collection/FINANCE/apkpure/com.konylabs.capitalone/com.konylabs.capitalone.xapk.zip\")",
+      "Bash(node index.js log-view --help)",
+      "Bash(node *)"
     ]
   }
 }

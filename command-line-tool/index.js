@@ -13,6 +13,7 @@
  *   start-emulator     Launch an AVD and wait until booted
  *   setup-emulator     Download image, create/recreate AVD, and boot it
  *   check-emulator     Diagnose emulator GPU, KVM, GuestAngle, and AVD readiness
+ *   categories         List all Google Play category IDs
  *   download           Download APKs (ApkPure / Google Play / Androzoo)
  *   reset-failed       Delete .skip_list.json files to retry failed apps
  *   compile            Compile LogInjector.java
@@ -21,6 +22,7 @@
  *   uninstall          Bulk uninstall by category
  *   uninstall-playstore  Uninstall all Play Store apps on device
  *   kanban             Scan APK directory and show ads/no-ads Kanban board
+ *   log-view           Scan log dir, filter by app/keywords, display entries + optional FSM popup
  */
 
 const { Command } = require("commander");
@@ -37,6 +39,7 @@ require("./commands/devices").register(program);
 require("./commands/start-emulator").register(program);
 require("./commands/setup-emulator").register(program);
 require("./commands/check-emulator").register(program);
+require("./commands/categories").register(program);
 require("./commands/download").register(program);
 require("./commands/reset-failed").register(program);
 require("./commands/compile").register(program);
@@ -44,5 +47,6 @@ require("./commands/inject").register(program);
 require("./commands/instrument").register(program);
 require("./commands/uninstall").register(program);
 require("./commands/kanban").register(program);
+require("./commands/log-view").register(program);
 
 program.parse(process.argv);

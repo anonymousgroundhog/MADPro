@@ -3,13 +3,7 @@
  * `madpro help-menu` — detailed help for all commands.
  */
 
-const CATEGORIES = [
-  "GAME_ACTION", "GAME_CASUAL", "GAME_PUZZLE", "GAME_ROLE_PLAYING",
-  "SOCIAL", "COMMUNICATION", "PRODUCTIVITY", "ENTERTAINMENT",
-  "FINANCE", "HEALTH_AND_FITNESS", "EDUCATION", "MUSIC_AND_AUDIO",
-  "NEWS_AND_MAGAZINES", "SHOPPING", "TRAVEL_AND_LOCAL",
-  "TOOLS", "PHOTOGRAPHY", "BUSINESS", "MEDICAL", "MAPS_AND_NAVIGATION",
-];
+const { ALL_CATEGORY_IDS } = require("../lib/play-categories");
 
 const MENU = `
 ╔══════════════════════════════════════════════════════════════════════╗
@@ -121,6 +115,20 @@ USAGE
     madpro start-emulator Pixel_6_API_34 --no-snapshot --wipe-data
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  categories
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  List all Google Play category IDs and their display names.
+  Use these IDs with -c / --categories in the download command.
+
+  Options:
+    --ids-only   Print only the IDs, one per line (useful for scripting)
+
+  Examples:
+    madpro categories
+    madpro categories --ids-only
+    madpro categories --ids-only | xargs -I{} echo "madpro download -c {} -n 5"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   download
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Download APKs from one of three backends:
@@ -181,25 +189,51 @@ USAGE
   │                                                                  │
   │ Get an API key: https://androzoo.uni.lu/access                  │
   │                                                                  │
+  │ Hashes can be supplied inline or from a CSV file. CSV files     │
+  │ may have any number of columns; use --csv-column to identify    │
+  │ which column holds the SHA256 hashes (name or 0-based index).   │
+  │                                                                  │
   │ Examples:                                                        │
+  │   # Inline hashes                                                │
   │   madpro download -b androzoo \\                                 │
   │     --api-key YOUR_KEY \\                                        │
   │     --sha256 HASH1,HASH2,HASH3 \\                               │
+  │     -o ./apks                                                    │
+  │                                                                  │
+  │   # CSV with a column named "sha256"                             │
+  │   madpro download -b androzoo \\                                 │
+  │     --api-key YOUR_KEY \\                                        │
+  │     --csv hashes.csv \\                                          │
+  │     -o ./apks                                                    │
+  │                                                                  │
+  │   # CSV with a column named "hash" at index 2                   │
+  │   madpro download -b androzoo \\                                 │
+  │     --api-key YOUR_KEY \\                                        │
+  │     --csv dataset.csv --csv-column hash \\                       │
+  │     -o ./apks                                                    │
+  │                                                                  │
+  │   # CSV where SHA256 is in the 4th column (index 3)             │
+  │   madpro download -b androzoo \\                                 │
+  │     --api-key YOUR_KEY \\                                        │
+  │     --csv dataset.csv --csv-column 3 \\                          │
   │     -o ./apks                                                    │
   └──────────────────────────────────────────────────────────────────┘
 
   Options (all backends unless noted):
     -b, --backend <name>      apkpure | google-play | androzoo  [apkpure]
     -c, --categories <list>   Comma-separated category IDs      [GAME_ACTION]
+    --all-categories          Download from ALL Google Play categories (overrides -c)
     -n, --count <n>           Apps per category                 [5]
     -o, --output <dir>        Output directory                  [./apks]
     -d, --device <serial>     ADB device serial (google-play)
     -t, --timeout <ms>        Per-download timeout, 0=none      [0]
     --api-key <key>           Androzoo API key
     --sha256 <hashes>         Comma-separated SHA256s (androzoo)
+    --csv <file>              CSV file containing SHA256 hashes (androzoo)
+    --csv-column <col>        Column name or 0-based index for SHA256s   [sha256]
 
-  Available categories:
-    ${CATEGORIES.join(", ")}
+  All category IDs (${ALL_CATEGORY_IDS.length} total — see: madpro categories):
+    ${ALL_CATEGORY_IDS.join(", ")}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   reset-failed  <output-dir>
@@ -389,6 +423,51 @@ USAGE
     - CSV is written row-by-row; safe to interrupt (partial results kept).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  log-view  <dir>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Scan a directory of .log files (produced by madpro instrument), group
+  entries by app package name, and print filtered log lines to stdout.
+  Optionally pops up the FSM model image in a viewer window.
+
+  Output format per app:
+    === com.example.app — N call(s), M unique ===
+      com.example.app.MainActivity → void onCreate(android.os.Bundle)
+      ...
+
+  Options:
+    -a, --app <package>       Show only entries for apps matching this substring
+    -k, --keywords <words>    Comma-separated method keywords to filter entries
+                              (e.g. onCreate,onPause,attachInfo)
+    -p, --pkg-filter <pats>   Comma-separated class/package patterns to filter
+                              entries by class name (e.g. com.google.android)
+    --no-dedup                Include duplicate entries (default: deduplicated)
+    --fsm [image]             Open FSM model image in a viewer window.
+                              Defaults to <project-root>/model.png.
+                              Pass a path to use a different image.
+    --list-apps               Print detected app packages in dir, then exit
+
+  Examples:
+    # List all apps detected in the log directory
+    madpro log-view ~/MADPro_Logcat --list-apps
+
+    # Show all entries for a specific app
+    madpro log-view ~/MADPro_Logcat -a ai.calzen.caloriecounter
+
+    # Filter by keywords and show FSM popup
+    madpro log-view ~/MADPro_Logcat -a ai.calzen.caloriecounter \\
+      -k onCreate,onPause,onResume --fsm
+
+    # Filter by class package pattern
+    madpro log-view ~/MADPro_Logcat \\
+      -p com.google.android -k attachInfo --fsm
+
+    # Use a specific FSM image path
+    madpro log-view ~/MADPro_Logcat --fsm ~/my-model.png
+
+    # Show all entries, all apps, no dedup
+    madpro log-view ~/MADPro_Logcat --no-dedup
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   TYPICAL WORKFLOW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -410,7 +489,11 @@ USAGE
   # 6. Run on device, capture logs
   madpro instrument ./injected -d emulator-5554 --duration 60000
 
-  # 7. Clean up device
+  # 7. View logs
+  madpro log-view ~/MADPro_Logcat --list-apps
+  madpro log-view ~/MADPro_Logcat -a com.example.app -k onCreate,onPause --fsm
+
+  # 8. Clean up device
   madpro uninstall-playstore -d emulator-5554
 
 `;

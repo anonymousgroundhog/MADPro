@@ -23,6 +23,7 @@
  *   uninstall-playstore  Uninstall all Play Store apps on device
  *   kanban             Scan APK directory and show ads/no-ads Kanban board
  *   log-view           Scan log dir, filter by app/keywords, display entries + optional FSM popup
+ *   stats              Pipeline status + Play Store metadata per app
  */
 
 const { Command } = require("commander");
@@ -48,5 +49,6 @@ require("./commands/instrument").register(program);
 require("./commands/uninstall").register(program);
 require("./commands/kanban").register(program);
 require("./commands/log-view").register(program);
+require("./commands/stats").register(program);
 
 program.parse(process.argv);

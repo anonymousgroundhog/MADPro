@@ -149,7 +149,11 @@
       "Read(//media/sean/My Passport/APK-Files-Collection/FINANCE/apkpure/com.konylabs.capitalone/**)",
       "Bash(xxd \"/media/sean/My Passport/APK-Files-Collection/FINANCE/apkpure/com.konylabs.capitalone/com.konylabs.capitalone.xapk.zip\")",
       "Bash(node index.js log-view --help)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(awk -F: '{sum += $NF} END {print \"Total:\", sum}')",
+      "Read(//media/sean/My Passport/APK-Files-Collection-Data/logs/**)",
+      "Read(//media/sean/My Passport/APK-Files-Collection-Data/logs/apkpure/**)",
+      "Bash(node index.js stats --help)"
     ]
   }
 }

@@ -8,87 +8,115 @@ const https = require("https");
 
 const CACHE = new Map(); // package → metadata
 
+// How much of the previous chunk to carry forward to catch patterns that span chunk boundaries.
+const OVERLAP = 512;
+
 /**
- * Fetches raw HTML from a URL via https.get (no external deps).
+ * Streams a Play Store page and extracts metadata without accumulating the full HTML.
+ * Keeps only a small overlap buffer between chunks — O(OVERLAP) memory per request.
+ *
+ * Returns null when HTTP 404 (app not on store).
+ * Returns { appName, rating, downloads, hasAds, category } on success.
  */
-function fetchHtml(url) {
+function fetchAndExtract(url) {
   return new Promise((resolve, reject) => {
-    const req = https.get(
-      url,
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Linux; Android 10; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-          "Accept-Language": "en-US,en;q=0.9",
-          Accept:
-            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        },
+    const state = {
+      appName:   null,
+      rating:    null,
+      downloads: null,
+      hasAds:    false,
+      category:  null,
+    };
+    let tail = ""; // overlap from previous chunk
+    let found404 = false;
+
+    const req = https.get(url, {
+      headers: {
+        "User-Agent":      "Mozilla/5.0 (Linux; Android 10; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       },
-      (res) => {
-        if (res.statusCode === 404) {
-          resolve(null); // app not found
-          return;
-        }
-        let data = "";
-        res.on("data", (chunk) => (data += chunk));
-        res.on("end", () => resolve(data));
-      }
-    );
-    req.on("error", reject);
-    req.setTimeout(10000, () => {
-      req.destroy();
-      reject(new Error("timeout"));
+    }, (res) => {
+      if (res.statusCode === 404) { res.resume(); res.on("end", () => resolve(null)); return; }
+
+      res.setEncoding("utf8");
+      res.on("data", chunk => {
+        const window = tail + chunk;
+        scanChunk(window, state);
+        tail = window.length > OVERLAP ? window.slice(-OVERLAP) : window;
+      });
+      res.on("end", () => resolve(state));
+      res.on("error", reject);
     });
+
+    req.on("error", reject);
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error("timeout")); });
   });
 }
 
-/**
- * Extracts a value from Play Store HTML using regex patterns on the JSON blobs.
- */
-function extractPlayData(html) {
-  if (!html) return null;
-
-  // App name — from <title ...> or itemprop="name"
-  const nameMatch =
-    html.match(/<title[^>]*>([^<]+?)(?:\s*-\s*Apps on Google Play)?<\/title>/i) ||
-    html.match(/itemprop="name"[^>]*>([^<]+)<\/span>/i) ||
-    html.match(/<span[^>]*itemprop="name"[^>]*>([^<]+)<\/span>/i);
-  const appName = (nameMatch?.[1] ?? "")
-    .replace(/ - Apps on Google Play$/i, "")
-    .replace(/ – Google Play$/i, "")
-    .trim() || null;
-
-  // Rating — Play Store uses class "TT9eCd" for the numeric rating value
-  // e.g. class="TT9eCd" aria-label="Rated 4.7 stars out of five stars">4.7<
-  let rating = null;
-  const ratingM =
-    html.match(/class="TT9eCd"[^>]*>([\d.]+)</) ||
-    html.match(/aria-label="Rated ([\d.]+) stars? out of five stars?"/) ||
-    html.match(/starRating"[^>]*>([\d.]+)</);
-  if (ratingM) {
-    const val = parseFloat(ratingM[1]);
-    if (val >= 1 && val <= 5) rating = val;
+/** Apply all extraction regexes to a window string, updating state in-place. */
+function scanChunk(w, s) {
+  if (!s.appName) {
+    const m =
+      w.match(/<title[^>]*>([^<]+?)(?:\s*-\s*Apps on Google Play)?<\/title>/i) ||
+      w.match(/itemprop="name"[^>]*>([^<]+)<\/span>/i) ||
+      w.match(/<span[^>]*itemprop="name"[^>]*>([^<]+)<\/span>/i);
+    if (m) {
+      s.appName = m[1]
+        .replace(/ - Apps on Google Play$/i, "")
+        .replace(/ – Google Play$/i, "")
+        .trim() || null;
+    }
   }
 
-  // Downloads — Play Store uses class "ClM7O" for the count, followed by "g1rdde">Downloads
-  // e.g. <div class="ClM7O">10B+</div><div class="g1rdde">Downloads</div>
-  const dlM =
-    html.match(/class="ClM7O">([^<]+)<\/div><div[^>]*>[^<]*[Dd]ownload/) ||
-    html.match(/>([\d,.]+[KMBT]?\+?)<\/div><div[^>]*>[^<]*[Dd]ownload/);
-  const downloads = dlM?.[1]?.trim() ?? null;
+  if (s.rating === null) {
+    const m =
+      w.match(/class="TT9eCd"[^>]*>([\d.]+)</) ||
+      w.match(/aria-label="Rated ([\d.]+) stars? out of five stars?"/) ||
+      w.match(/starRating"[^>]*>([\d.]+)</);
+    if (m) {
+      const val = parseFloat(m[1]);
+      if (val >= 1 && val <= 5) s.rating = val;
+    }
+  }
 
-  // Ads detection — Play Store shows "Contains ads" as a text badge
-  const hasAds =
-    /contains ads/i.test(html) ||
-    /containsAds["\s]*:\s*true/i.test(html);
+  if (!s.downloads) {
+    const m =
+      w.match(/class="ClM7O">([^<]+)<\/div><div[^>]*>[^<]*[Dd]ownload/) ||
+      w.match(/>([\d,.]+[KMBT]?\+?)<\/div><div[^>]*>[^<]*[Dd]ownload/);
+    if (m) s.downloads = m[1].trim();
+  }
 
-  // Category — embedded as JSON: "applicationCategory":"COMMUNICATION"
-  const rawCategory = html.match(/"applicationCategory"\s*:\s*"([^"]+)"/)?.[1] ?? null;
-  const category = rawCategory
-    ? rawCategory.toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
-    : null;
+  if (!s.hasAds) {
+    s.hasAds = /contains ads/i.test(w) || /containsAds["\s]*:\s*true/i.test(w);
+  }
 
-  return { appName, rating, downloads, hasAds, category };
+  if (!s.category) {
+    const m = w.match(/"applicationCategory"\s*:\s*"([^"]+)"/);
+    if (m) {
+      s.category = m[1].toLowerCase().replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    }
+  }
+}
+
+/** Full HTML fetch — used only by fetchTopPackages (package-list scrape, not per-app metadata). */
+function fetchHtml(url) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, {
+      headers: {
+        "User-Agent":      "Mozilla/5.0 (Linux; Android 10; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    }, (res) => {
+      if (res.statusCode === 404) { resolve(null); return; }
+      let data = "";
+      res.on("data", chunk => (data += chunk));
+      res.on("end", () => resolve(data));
+    });
+    req.on("error", reject);
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error("timeout")); });
+  });
 }
 
 /**
@@ -111,16 +139,11 @@ async function lookupPlayStore(packageName) {
   };
 
   try {
-    const html = await fetchHtml(storeUrl);
-    if (!html) {
+    const data = await fetchAndExtract(storeUrl);
+    if (!data) {
       result.stillOnStore = false;
     } else {
-      const data = extractPlayData(html);
-      result = {
-        ...result,
-        ...data,
-        stillOnStore: true,
-      };
+      result = { ...result, ...data, stillOnStore: true };
     }
   } catch (err) {
     result.error = err.message;

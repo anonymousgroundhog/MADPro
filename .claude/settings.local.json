@@ -153,7 +153,13 @@
       "Bash(awk -F: '{sum += $NF} END {print \"Total:\", sum}')",
       "Read(//media/sean/My Passport/APK-Files-Collection-Data/logs/**)",
       "Read(//media/sean/My Passport/APK-Files-Collection-Data/logs/apkpure/**)",
-      "Bash(node index.js stats --help)"
+      "Bash(node index.js stats --help)",
+      "Read(//media/sean/My Passport/APK-Files-Collection-Data/**)",
+      "Read(//media/sean/My Passport/APK-Files-Collection-Data/injected/**)",
+      "Bash(node index.js stats --original-dir '/media/sean/My Passport/APK-Files-Collection' --injected-dir '/media/sean/My Passport/APK-Files-Collection-Data/injected' --logs-dir '/media/sean/My Passport/APK-Files-Collection-Data/logs' --no-play-store --pkg com.waze)",
+      "Bash(node index.js stats --original-dir '/media/sean/My Passport/APK-Files-Collection' --injected-dir '/media/sean/My Passport/APK-Files-Collection-Data/injected' --logs-dir '/media/sean/My Passport/APK-Files-Collection-Data/logs' --no-play-store --pkg com.discord)",
+      "Bash(node -e ' *)",
+      "Bash(cd *)"
     ]
   }
 }

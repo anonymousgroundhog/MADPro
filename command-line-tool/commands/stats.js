@@ -86,9 +86,15 @@ function parseOriginalDir(rootDir) {
         const apkPath   = fs.existsSync(apkDouble) ? apkDouble
                         : fs.existsSync(apkSingle) ? apkSingle
                         : null;
-        if (!result.has(pkg)) {
-          result.set(pkg, { category: topName, source: srcName, apkPath });
+        let rec = result.get(pkg);
+        if (!rec) {
+          rec = { sources: new Set(), catBySource: new Map(), apkPath: null };
+          result.set(pkg, rec);
         }
+        rec.sources.add(srcName);
+        if (!rec.catBySource.has(srcName)) rec.catBySource.set(srcName, new Set());
+        rec.catBySource.get(srcName).add(topName);
+        if (!rec.apkPath && apkPath) rec.apkPath = apkPath;
       }
     }
   }
@@ -126,9 +132,14 @@ function parseInjectedDir(rootDir) {
       const parsed = parseFolderName(folderName, source);
       if (!parsed) continue;
       const { pkg, category } = parsed;
-      if (!result.has(pkg)) {
-        result.set(pkg, { category, source, injectedDir: folderPath });
+      let rec = result.get(pkg);
+      if (!rec) {
+        rec = { sources: new Set(), catBySource: new Map(), injectedDir: folderPath };
+        result.set(pkg, rec);
       }
+      rec.sources.add(source);
+      if (!rec.catBySource.has(source)) rec.catBySource.set(source, new Set());
+      rec.catBySource.get(source).add(category);
     }
   }
 
@@ -163,18 +174,28 @@ async function parseLogsDir(rootDir) {
         const { pkg, sootLines } = await readAndrozooLog(logPath);
         if (pkg) {
           hashToPkg.set(baseName, pkg);
-          if (!result.has(pkg)) {
-            result.set(pkg, { source, logPath, sootLines, category: null });
+          let rec = result.get(pkg);
+          if (!rec) {
+            rec = { sources: new Set(), catBySource: new Map(), logPath, sootLines: 0 };
+            result.set(pkg, rec);
           }
+          rec.sources.add(source);
+          rec.sootLines = Math.max(rec.sootLines, sootLines);
         }
       } else {
         const parsed = parseFolderName(baseName, source);
         if (!parsed) continue;
         const { pkg, category } = parsed;
         const sootLines = await countSootLines(logPath);
-        if (!result.has(pkg)) {
-          result.set(pkg, { source, logPath, sootLines, category });
+        let rec = result.get(pkg);
+        if (!rec) {
+          rec = { sources: new Set(), catBySource: new Map(), logPath, sootLines: 0 };
+          result.set(pkg, rec);
         }
+        rec.sources.add(source);
+        if (!rec.catBySource.has(source)) rec.catBySource.set(source, new Set());
+        rec.catBySource.get(source).add(category);
+        rec.sootLines = Math.max(rec.sootLines, sootLines);
       }
     }
   }
@@ -345,22 +366,39 @@ function register(program) {
       process.stderr.write("Scanning logs dir (reading headers + counting SootInjection lines)...\n");
       const { result: logMap, hashToPkg } = await parseLogsDir(logsDir);
 
-      // Resolve androzoo hashes → pkg in injected dir and origHashMap
+      // Resolve androzoo hashes → pkg in injected dir (adds androzoo source label)
       for (const [hash, meta] of injHashMap) {
         const pkg = hashToPkg.get(hash);
-        if (pkg && !injMap.has(pkg)) injMap.set(pkg, { ...meta });
+        if (!pkg) continue;
+        let rec = injMap.get(pkg);
+        if (!rec) {
+          rec = { sources: new Set(), catBySource: new Map(), injectedDir: meta.injectedDir };
+          injMap.set(pkg, rec);
+        }
+        rec.sources.add("androzoo");
       }
-      // Build pkg → sha256 map for androzoo (hash IS the filename)
+      // Resolve androzoo originals → pkg; build pkg → sha256 (hash IS the filename)
+      // and tag the pkg with the androzoo source label in origMap.
       const androzooSha = new Map(); // pkg → sha256
       for (const [hash, origMeta] of origHashMap) {
         const pkg = hashToPkg.get(hash);
-        if (pkg) androzooSha.set(pkg, hash);
+        if (!pkg) continue;
+        androzooSha.set(pkg, hash);
+        let rec = origMap.get(pkg);
+        if (!rec) {
+          rec = { sources: new Set(), catBySource: new Map(), apkPath: origMeta.apkPath };
+          origMap.set(pkg, rec);
+        }
+        rec.sources.add("androzoo");
       }
 
       // ── collect all unique packages ──
       const allPkgs = new Set([...origMap.keys(), ...injMap.keys(), ...logMap.keys()]);
 
       // ── build records ──
+      // Each app appears in 1+ sources (apkpure / google_play / androzoo).
+      // A pkg can live in multiple source dirs (376 cross-source dupes observed),
+      // so `source` and `category` are aggregated across ALL discovered slots.
       let records = [];
       for (const pkg of [...allPkgs].sort()) {
         const origMeta = origMap.get(pkg) || null;
@@ -375,17 +413,46 @@ function register(program) {
           sootLines,
         });
 
-        const category =
-          origMeta?.category || injMeta?.category || logMeta?.category || null;
-        const source =
-          origMeta?.source || injMeta?.source || logMeta?.source || null;
+        // Aggregate every source label this pkg carries across the three dirs.
+        const sourceSet = new Set();
+        // Aggregate categories per source. A pkg can appear under multiple
+        // categories within the SAME source (e.g. com.discord in both
+        // SOCIAL/google_play and COMMUNICATION/google_play), so each source
+        // maps to a Set of categories.
+        const catBySource = new Map(); // source → Set<category>
+        for (const meta of [origMeta, injMeta, logMeta]) {
+          if (!meta) continue;
+          for (const s of (meta.sources || (meta.source ? [meta.source] : []))) {
+            sourceSet.add(s);
+          }
+          if (meta.catBySource) {
+            for (const [s, cats] of meta.catBySource) {
+              if (!catBySource.has(s)) catBySource.set(s, new Set());
+              for (const c of cats) if (c) catBySource.get(s).add(c);
+            }
+          }
+        }
+
+        const sources    = [...sourceSet].sort();
+        const source      = sources.join(",") || null;
+        // Flatten all (source, category) pairs. Render a single category when
+        // there's exactly one distinct category overall; otherwise label each:
+        // "apkpure:COMMUNICATION,google_play:COMMUNICATION,google_play:SOCIAL".
+        const pairs = [];
+        const allCats = new Set();
+        for (const [s, cats] of [...catBySource.entries()].sort()) {
+          for (const c of [...cats].sort()) { pairs.push(`${s}:${c}`); allCats.add(c); }
+        }
+        const category = allCats.size === 0 ? null
+                       : allCats.size === 1 ? [...allCats][0]
+                       : pairs.join(",");
 
         // sha256: androzoo filename IS the hash; apkpure/google_play computed later
         const knownSha = androzooSha.get(pkg) || null;
         const apkPath  = origMeta?.apkPath    || null;
 
         records.push({
-          pkg, category, source, status, sootLines,
+          pkg, category, source, sources, status, sootLines,
           sha256: knownSha, apkPath,
           appName: null, rating: null, downloads: null, hasAds: null, storeCategory: null,
         });

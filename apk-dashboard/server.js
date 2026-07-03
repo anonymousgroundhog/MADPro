@@ -6643,7 +6643,11 @@ const server = http.createServer(async (req, res) => {
       }
       const totalApps = allPkgSet.size;
 
+      // A package seen in more than one log file is almost certainly a shared
+      // library (ads SDK, webview, gms, etc.), not an app — apps are scanned
+      // one APK per log file, so a real app package occurs in exactly one file.
       const packages = [...pkgMap.entries()]
+        .filter(([, files]) => files.size === 1)
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([name, files]) => ({ name, files: [...files].sort() }));
 
@@ -6773,7 +6777,11 @@ const server = http.createServer(async (req, res) => {
           pkgMap.get(pkg).add(path.basename(fp));
         }
       }
+      // A package seen in more than one log file is almost certainly a shared
+      // library (ads SDK, webview, gms, etc.), not an app — apps are scanned
+      // one APK per log file, so a real app package occurs in exactly one file.
       const packages = [...pkgMap.entries()]
+        .filter(([, files]) => files.size === 1)
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([name, files]) => ({ name, files: [...files].sort() }));
       return jsonResponse(res, { dir: abs, totalFiles: logFiles.length, packages });

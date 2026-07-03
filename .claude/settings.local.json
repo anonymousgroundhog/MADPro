@@ -159,7 +159,8 @@
       "Bash(node index.js stats --original-dir '/media/sean/My Passport/APK-Files-Collection' --injected-dir '/media/sean/My Passport/APK-Files-Collection-Data/injected' --logs-dir '/media/sean/My Passport/APK-Files-Collection-Data/logs' --no-play-store --pkg com.waze)",
       "Bash(node index.js stats --original-dir '/media/sean/My Passport/APK-Files-Collection' --injected-dir '/media/sean/My Passport/APK-Files-Collection-Data/injected' --logs-dir '/media/sean/My Passport/APK-Files-Collection-Data/logs' --no-play-store --pkg com.discord)",
       "Bash(node -e ' *)",
-      "Bash(cd *)"
+      "Bash(cd *)",
+      "Bash(grep -n \"packages.push\\\\|files\\) \\\\|files\\\\`\\\\|\\\\` files\\)\\\\|totalApps\\\\|fileCount\\\\|singleFile\\\\|files ===\\\\|files.length\\\\|isApp\\\\|isLibrary\" /home/sean/Documents/Projects/MADPro/apk-dashboard/server.js)"
     ]
   }
 }

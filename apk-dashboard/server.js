@@ -305,14 +305,14 @@ function parseLogEntriesFiltered(absPath, keep) {
 // Searches method names (with/without paren) and full signatures.
 function entryMatchesQuery(e, queryLow) {
   if (e.methodName) {
-    const mn = e.methodName.toLowerCase();
-    if (mn.indexOf(queryLow) !== -1) return true;
-    // Also match methodName + "(" for consistency with old behavior
-    const mnWithParen = (e.methodName + "(").toLowerCase();
-    if (mnWithParen.indexOf(queryLow) !== -1) return true;
+    // Require " keyword(" so the keyword must be the whole method name
+    // (space = left boundary, "(" = right boundary) — substrings inside
+    // other method names (e.g. "build" inside "rebuild") don't match.
+    const mnWithParen = (" " + e.methodName + "(").toLowerCase();
+    if (mnWithParen.indexOf(" " + queryLow + "(") !== -1) return true;
   }
   // Fallback: check full sig for raw entries
-  if (e.sig && e.sig.toLowerCase().indexOf(queryLow) !== -1) return true;
+  if (e.sig && e.sig.toLowerCase().indexOf(" " + queryLow + "(") !== -1) return true;
   return false;
 }
 
@@ -3569,11 +3569,10 @@ function _searchEntriesClient(entries, queriesLow, pkgPatterns) {
 
 function _clientEntryMatchesQuery(e, queryLow) {
   if (e.methodName) {
-    var mn = e.methodName.toLowerCase();
-    if (mn.indexOf(queryLow) !== -1) return true;
-    if ((e.methodName + '(').toLowerCase().indexOf(queryLow) !== -1) return true;
+    var mnWithParen = (' ' + e.methodName + '(').toLowerCase();
+    if (mnWithParen.indexOf(' ' + queryLow + '(') !== -1) return true;
   }
-  if (e.sig && e.sig.toLowerCase().indexOf(queryLow) !== -1) return true;
+  if (e.sig && e.sig.toLowerCase().indexOf(' ' + queryLow + '(') !== -1) return true;
   return false;
 }
 

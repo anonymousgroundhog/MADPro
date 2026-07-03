@@ -20,6 +20,26 @@ const JAR_LIBS_DIR  = path.join(PROJECT_ROOT, "jar_libs");
 const JAVA_SRC_DIR  = path.join(PROJECT_ROOT, "java");
 const INJECTOR_SRC  = path.join(JAVA_SRC_DIR, "LogInjector.java");
 const INJECTOR_CLASS = path.join(JAVA_SRC_DIR, "LogInjector.class");
+const MAX_LOGS_PER_BUNDLE = 10; // retain at most this many timestamped log files per bundle
+
+// Delete the oldest timestamped logcat files for a bundle so at most
+// (keep - 1) survive before a new one is written (the new run brings it to `keep`).
+function pruneOldLogs(logDir, bundleName, keep) {
+  let files;
+  try {
+    files = fs.readdirSync(logDir, { withFileTypes: true })
+      .filter(e => e.isFile() && e.name.startsWith(bundleName + "_") && e.name.toLowerCase().endsWith(".log"))
+      .map(e => path.join(logDir, e.name));
+  } catch {
+    return;
+  }
+  if (files.length < keep) return;
+  files.sort(); // timestamped names (ISO-based) sort chronologically
+  const toDelete = files.slice(0, files.length - keep + 1);
+  for (const f of toDelete) {
+    try { fs.unlinkSync(f); } catch {}
+  }
+}
 
 // Android platforms: prefer env vars, then common SDK paths
 function findAndroidPlatforms() {
@@ -1031,7 +1051,11 @@ function startInstrumentation({ apkDir, logDir, deviceSerial }) {
         ? [...s, "logcat", "--pid", pid, "-v", "time"]
         : [...s, "logcat", "-v", "time", "-s", "SootInjection:D"];
 
-      const logFile = path.join(resolvedLogDir, bundleName + ".log");
+      // Timestamped per-run file so repeated instrumentation of the same
+      // bundle never appends onto (and unboundedly grows) a single log file.
+      const runStamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const logFile = path.join(resolvedLogDir, `${bundleName}_${runStamp}.log`);
+      pruneOldLogs(resolvedLogDir, bundleName, MAX_LOGS_PER_BUNDLE);
       const logStream = fs.createWriteStream(logFile, { flags: "a" });
       logStream.write(`=== ${new Date().toISOString()} | ${pkg} ===\n`);
       pushLine(job, `[INFO] Streaming logcat to ${logFile}`);

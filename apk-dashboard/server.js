@@ -219,31 +219,86 @@ function extractAppPackages(content) {
   return [...found];
 }
 
+// Same as extractAppPackages but streams the file line-by-line so huge log
+// files never get materialized as a single JS string.
+function extractAppPackagesFromFile(absPath) {
+  const found = new Set();
+  forEachLogLine(absPath, (line) => {
+    let m;
+    NATIVELOADER_PKG_RE.lastIndex = 0;
+    while ((m = NATIVELOADER_PKG_RE.exec(line)) !== null) {
+      found.add(m[1]);
+    }
+  });
+  return [...found];
+}
+
+// Read a (possibly huge) log file and invoke onLine for each line, without
+// ever materializing the whole file as a single JS string (V8 caps string
+// length around 0x1fffffe8 chars, which large logcat captures can exceed).
+function forEachLogLine(absPath, onLine) {
+  const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB
+  const fd = fs.openSync(absPath, "r");
+  try {
+    const buf = Buffer.alloc(CHUNK_SIZE);
+    let carry = "";
+    let bytesRead;
+    while ((bytesRead = fs.readSync(fd, buf, 0, CHUNK_SIZE, null)) > 0) {
+      const chunk = carry + buf.toString("utf8", 0, bytesRead);
+      const lines = chunk.split("\n");
+      carry = lines.pop();
+      for (const line of lines) onLine(line);
+    }
+    if (carry) onLine(carry);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 // Parse a logcat file and return all SootInjection entries
 function parseLogEntries(absPath) {
-  const content = fs.readFileSync(absPath, "utf8");
+  return parseLogEntriesFiltered(absPath, null);
+}
+
+// Same parse as parseLogEntries, but if `keep` is provided, only entries for
+// which keep(entry, index) returns true are materialized/retained in the
+// returned array — every entry is still scanned (so total/unique counts and
+// duplicate-detection stay correct), but memory only holds the kept subset.
+// This avoids building a full in-memory array of every entry (which can OOM
+// on logcat files with millions of lines) just to slice out one page.
+function parseLogEntriesFiltered(absPath, keep) {
   const MARKER = "Entering: ";
   const SIG_RE = /^<(.+):\s+(\S+)\s+([^(]+)\(([^)]*)\)>$/;
-  const entries = [];
+  const kept = [];
   const seen = new Set();
-  for (const line of content.split("\n")) {
+  let total = 0;
+  let unique = 0;
+  forEachLogLine(absPath, (line) => {
     const idx = line.indexOf(MARKER);
-    if (idx === -1) continue;
+    if (idx === -1) return;
     const sig = line.slice(idx + MARKER.length).trim();
     const m = SIG_RE.exec(sig);
+    let entry;
     if (m) {
       const className  = m[1].trim();
       const returnType = m[2].trim();
       const methodName = m[3].trim();
       const args       = m[4].trim();
       const key = className + "#" + methodName + "(" + args + ")";
-      entries.push({ className, returnType, methodName, args, sig, key, duplicate: seen.has(key) });
+      const duplicate = seen.has(key);
+      entry = { className, returnType, methodName, args, sig, key, duplicate };
       seen.add(key);
+      if (!duplicate) unique++;
     } else {
-      entries.push({ className: null, returnType: null, methodName: null, args: null, sig, key: sig, duplicate: false });
+      entry = { className: null, returnType: null, methodName: null, args: null, sig, key: sig, duplicate: false };
+      unique++;
     }
-  }
-  return entries;
+    const index = total++;
+    if (!keep || keep(entry, index)) kept.push(entry);
+  });
+  kept.total = total;
+  kept.uniqueCount = unique;
+  return kept;
 }
 
 // Match a single log entry against a cleaned query string (case-insensitive).
@@ -1042,6 +1097,7 @@ function renderHtml() {
         <button class="tools-btn-sm" onclick="openFsmContractModalPush()" style="background:var(--accent-no-ads);color:#fff;border-color:var(--accent-no-ads);" title="Push loaded log data to a deployed FSM smart contract on Ganache">⬆ Push Data to Contract</button>
       </div>
       <div id="kwResults" style="margin-top:14px;"></div>
+      <div id="kwMarkedViolations" style="margin-top:14px;"></div>
     </div>
 
     <!-- Right: FSM model image -->
@@ -3091,6 +3147,7 @@ async function loadLogFile() {
   if (!file) return;
   _currentLogFile = file;
   _fsmLogEntries = [];
+  _kwCurrentSource = { app: file.split('/').pop(), files: [file.split('/').pop()] };
   await _renderLogPage(file, 0);
 }
 
@@ -3314,6 +3371,7 @@ async function loadAppLogs() {
     });
     _appLogEntries = data.entries || [];
     _currentLogFile = ''; // app-mode: no single file
+    _kwCurrentSource = { app: pkg, files: pkgEntry.files.slice() };
     meta.textContent = 'Loaded ' + files.length + ' file(s) for ' + pkg + ' — ' + data.total + ' call(s), ' + data.unique + ' unique';
     renderAppLogEntries();
   } catch (e) {
@@ -3472,6 +3530,12 @@ async function loadApkBrowserDir(dirPath) {
 let _fsmLogEntries = []; // full entry objects from the currently loaded log
 let _kwSequence = [];   // last keyword search call-sequence: [{entry, kwIndices}] in log order
 
+// Tracks the app name + source file(s) behind whatever entries are currently
+// loaded in the Log Viewer, so a keyword-search violation can be marked with
+// the right app/file labels regardless of single-file or app (multi-file) mode.
+let _kwCurrentSource = { app: '', files: [] };
+let _kwMarkedViolations = []; // [{app, file}] — one row per (app, file)
+
 // Strip special chars from a keyword, leaving only alphanumeric + underscore
 // Returns array of lowercase pkg patterns from the textarea (empty array = no filter)
 function readPkgFilters() {
@@ -3573,8 +3637,11 @@ async function runKeywordSearch() {
     }
 
     var pkgBadge = pkgFilters.length ? ' <span style="font-size:.78rem;font-weight:400;opacity:.85;">| pkg: ' + pkgFilters.map(function(p) { return '<code>' + escHtml(p) + '</code>'; }).join(', ') + '</span>' : '';
-    var html = '<div style="font-size:.88rem;font-weight:700;color:' + summaryColor + ';margin-bottom:10px;padding:8px 12px;background:var(--card-bg);border:1px solid ' + summaryColor + ';border-radius:6px;">'
-      + summary + ' &mdash; ' + hitCount + ' / ' + total + ' keywords found' + pkgBadge + '</div>'
+    var canMark = summary !== 'PASS' && _kwCurrentSource.app;
+    var html = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:.88rem;font-weight:700;color:' + summaryColor + ';margin-bottom:10px;padding:8px 12px;background:var(--card-bg);border:1px solid ' + summaryColor + ';border-radius:6px;">'
+      + '<span>' + summary + ' &mdash; ' + hitCount + ' / ' + total + ' keywords found' + pkgBadge + '</span>'
+      + (canMark ? '<button class="tools-btn-sm" onclick="kwMarkAsViolation()" style="margin-left:auto;font-weight:600;">Mark as Violation</button>' : '')
+      + '</div>'
       + '<div style="margin-bottom:16px;">' + summaryRows + '</div>';
 
     // Save sequence for Push Data to Contract
@@ -3631,6 +3698,97 @@ function clearKeywordSearch() {
   document.getElementById('pkgFilter').value = '';
   document.getElementById('kwResults').innerHTML = '';
   _kwSequence = [];
+}
+
+// ── Log Viewer Marked Violations (mark / copy / export) ─────────────────────────
+
+function kwMarkAsViolation() {
+  var src = _kwCurrentSource;
+  if (!src || !src.app) return;
+  var files = src.files && src.files.length ? src.files : [''];
+  files.forEach(function(f) {
+    var already = _kwMarkedViolations.some(function(v) { return v.app === src.app && v.file === f; });
+    if (!already) _kwMarkedViolations.push({ app: src.app, file: f });
+  });
+  kwRenderMarkedViolations();
+}
+
+function kwUnmarkViolation(app, file) {
+  _kwMarkedViolations = _kwMarkedViolations.filter(function(v) { return !(v.app === app && v.file === file); });
+  kwRenderMarkedViolations();
+}
+
+function kwClearMarkedViolations() {
+  if (!_kwMarkedViolations.length) return;
+  _kwMarkedViolations = [];
+  kwRenderMarkedViolations();
+}
+
+function kwRenderMarkedViolations() {
+  var el = document.getElementById('kwMarkedViolations');
+  if (!el) return;
+  if (!_kwMarkedViolations.length) {
+    el.innerHTML = '';
+    return;
+  }
+  var html = '<div style="font-weight:700;font-size:.78rem;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em;">MARKED VIOLATIONS (' + _kwMarkedViolations.length + ')</div>';
+  html += '<div style="max-height:180px;overflow-y:auto;border:1px solid var(--card-border);border-radius:8px;margin-bottom:8px;">';
+  _kwMarkedViolations.forEach(function(v) {
+    html += '<div style="display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid rgba(255,255,255,.04);font-size:.76rem;">'
+      + '<span style="color:#ef4444;font-weight:700;flex-shrink:0;">' + escHtml(v.app) + '</span>'
+      + '<span style="color:var(--text-muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace;">' + escHtml(v.file) + '</span>'
+      + '<button class="tools-btn-sm" onclick="kwUnmarkViolation(' + JSON.stringify(v.app).replace(/"/g,'&quot;') + ',' + JSON.stringify(v.file).replace(/"/g,'&quot;') + ')" style="flex-shrink:0;padding:2px 8px;font-size:.7rem;">Remove</button>'
+      + '</div>';
+  });
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px;">'
+    + '<button class="tools-btn-sm" onclick="kwCopyViolationsToClipboard()">📋 Copy to Clipboard</button>'
+    + '<button class="tools-btn-sm" onclick="kwExportViolationsCsv()">⬇ Export CSV</button>'
+    + '<button class="tools-btn-sm" onclick="kwClearMarkedViolations()" style="margin-left:auto;">Clear All</button>'
+    + '</div>';
+  el.innerHTML = html;
+}
+
+function _kwViolationsCsvText() {
+  var rows = ['app,file'];
+  _kwMarkedViolations.forEach(function(v) {
+    var app = '"' + String(v.app).replace(/"/g, '""') + '"';
+    var file = '"' + String(v.file).replace(/"/g, '""') + '"';
+    rows.push(app + ',' + file);
+  });
+  return rows.join('\\n');
+}
+
+function kwCopyViolationsToClipboard() {
+  if (!_kwMarkedViolations.length) return;
+  var text = _kwViolationsCsvText();
+  navigator.clipboard.writeText(text).then(function() {
+    kwFlashStatus('Copied ' + _kwMarkedViolations.length + ' row(s) to clipboard.');
+  }).catch(function(e) {
+    kwFlashStatus('Copy failed: ' + e.message);
+  });
+}
+
+function kwExportViolationsCsv() {
+  if (!_kwMarkedViolations.length) return;
+  var text = _kwViolationsCsvText();
+  var blob = new Blob([text], { type: 'text/csv;charset=utf-8;' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'log_viewer_violations_' + new Date().toISOString().replace(/[:.]/g, '-') + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function kwFlashStatus(msg) {
+  var meta = document.getElementById('logViewerMeta');
+  if (!meta) return;
+  var prev = meta.textContent;
+  meta.textContent = msg;
+  setTimeout(function() { if (meta.textContent === msg) meta.textContent = prev; }, 2500);
 }
 
 // ── FSM Contract Generator ────────────────────────────────────────────────────
@@ -6466,8 +6624,7 @@ const server = http.createServer(async (req, res) => {
       const pkgMap = new Map();    // pkg -> Set of basenames (matched files only)
       const allPkgSet = new Set(); // all app packages across all files (for totalApps)
       for (const fp of allFiles) {
-        const content = fs.readFileSync(fp, "utf8");
-        const filePkgs = extractAppPackages(content);
+        const filePkgs = extractAppPackagesFromFile(fp);
         for (const p of filePkgs) allPkgSet.add(p);
         const entries = parseLogEntries(fp);
         const pkgMatch = pkgPatterns.length
@@ -6521,18 +6678,34 @@ const server = http.createServer(async (req, res) => {
     const limit    = Math.min(2000, Math.max(1, parseInt(reqUrl.searchParams.get("limit") || "300", 10)));
     const pkgParam = (reqUrl.searchParams.get("pkg") || "").trim();
     try {
-      const allEntries = parseLogEntries(abs);
       let pkgPatterns = [];
       if (pkgParam) { try { pkgPatterns = JSON.parse(pkgParam).map(p => p.toLowerCase()).filter(Boolean); } catch { pkgPatterns = [pkgParam.toLowerCase()]; } }
-      const entries = pkgPatterns.length
-        ? allEntries.filter(e => { const cls = (e.className || e.sig || "").toLowerCase(); return pkgPatterns.some(p => cls.indexOf(p) !== -1); })
-        : allEntries;
-      const unique = entries.filter(e => !e.duplicate).length;
+      const matchesPkg = (e) => {
+        if (!pkgPatterns.length) return true;
+        const cls = (e.className || e.sig || "").toLowerCase();
+        return pkgPatterns.some(p => cls.indexOf(p) !== -1);
+      };
+      // Only materialize entries that (a) pass the pkg filter and (b) fall
+      // within [offset, offset+limit) of the filtered set — every entry is
+      // still scanned for accurate total/unique counts, but the full file's
+      // entries are never all held in memory at once. When pkg-filtering,
+      // unique keys are tracked in a Set (cheap: just strings) rather than
+      // keeping every filtered entry object around.
+      let filteredIndex = -1;
+      const filteredKeys = pkgPatterns.length ? new Set() : null;
+      const entries = parseLogEntriesFiltered(abs, (e) => {
+        if (!matchesPkg(e)) return false;
+        if (filteredKeys && !e.duplicate) filteredKeys.add(e.key);
+        filteredIndex++;
+        return filteredIndex >= offset && filteredIndex < offset + limit;
+      });
+      const total = pkgPatterns.length ? filteredIndex + 1 : entries.total;
+      const unique = pkgPatterns.length ? filteredKeys.size : entries.uniqueCount;
       return jsonResponse(res, {
         file: abs,
-        total: entries.length,
+        total,
         unique,
-        entries: entries.slice(offset, offset + limit),
+        entries,
       });
     } catch (err) {
       return jsonResponse(res, { error: err.message }, 500);
@@ -6550,29 +6723,29 @@ const server = http.createServer(async (req, res) => {
     try { queries = JSON.parse(qParam); } catch { return jsonResponse(res, { error: "Invalid q param" }, 400); }
     if (!Array.isArray(queries)) return jsonResponse(res, { error: "q must be array" }, 400);
     try {
-      const allEntries = parseLogEntries(abs);
       let pkgPatterns = [];
       if (pkgParam) { try { pkgPatterns = JSON.parse(pkgParam).map(p => p.toLowerCase()).filter(Boolean); } catch { pkgPatterns = [pkgParam.toLowerCase()]; } }
-      const entries = pkgPatterns.length
-        ? allEntries.filter(e => { const cls = (e.className || e.sig || "").toLowerCase(); return pkgPatterns.some(p => cls.indexOf(p) !== -1); })
-        : allEntries;
       const queriesLow = queries.map(q => q.toLowerCase());
+      const counts = new Array(queriesLow.length).fill(0);
 
-      // Per-keyword counts
-      const perKeyword = queriesLow.map((ql, i) => ({
-        query: queries[i],
-        count: entries.filter(e => entryMatchesQuery(e, ql)).length,
-      }));
-
-      // Ordered sequence: entries that match at least one keyword
+      // Scan every entry once; only the (typically small) subset matching at
+      // least one keyword is retained, avoiding an in-memory array of every
+      // entry in files with millions of lines.
       const sequence = [];
-      for (const e of entries) {
+      parseLogEntriesFiltered(abs, (e) => {
+        if (pkgPatterns.length) {
+          const cls = (e.className || e.sig || "").toLowerCase();
+          if (!pkgPatterns.some(p => cls.indexOf(p) !== -1)) return false;
+        }
         const kwIndices = [];
         for (let i = 0; i < queriesLow.length; i++) {
-          if (entryMatchesQuery(e, queriesLow[i])) kwIndices.push(i);
+          if (entryMatchesQuery(e, queriesLow[i])) { kwIndices.push(i); counts[i]++; }
         }
         if (kwIndices.length > 0) sequence.push({ entry: e, kwIndices });
-      }
+        return false; // never retained by parseLogEntriesFiltered itself; we push manually above
+      });
+
+      const perKeyword = queriesLow.map((ql, i) => ({ query: queries[i], count: counts[i] }));
 
       return jsonResponse(res, { perKeyword, sequence });
     } catch (err) {
@@ -6594,8 +6767,7 @@ const server = http.createServer(async (req, res) => {
       // Map package name → set of files it appears in
       const pkgMap = new Map(); // pkg -> Set of basenames
       for (const fp of logFiles) {
-        const content = fs.readFileSync(fp, "utf8");
-        const pkgs = extractAppPackages(content);
+        const pkgs = extractAppPackagesFromFile(fp);
         for (const pkg of pkgs) {
           if (!pkgMap.has(pkg)) pkgMap.set(pkg, new Set());
           pkgMap.get(pkg).add(path.basename(fp));
@@ -6619,27 +6791,31 @@ const server = http.createServer(async (req, res) => {
     try { files = JSON.parse(body).files; } catch { return jsonResponse(res, { error: "Invalid body" }, 400); }
     if (!Array.isArray(files) || !files.length) return jsonResponse(res, { error: "files array required" }, 400);
     try {
-      const allEntries = [];
+      const uniqueEntries = [];
       const seenGlobal = new Set();
       const appPackages = new Set();
+      let total = 0;
       for (const fp of files) {
         const abs = path.resolve(fp.replace(/^~/, os.homedir()));
-        const content = fs.readFileSync(abs, "utf8");
         // Extract app packages from nativeloader lines in this file
-        for (const pkg of extractAppPackages(content)) appPackages.add(pkg);
-        const entries = parseLogEntries(abs);
-        for (const e of entries) {
-          const dup = seenGlobal.has(e.key);
-          allEntries.push({ ...e, duplicate: dup, sourceFile: path.basename(abs) });
+        for (const pkg of extractAppPackagesFromFile(abs)) appPackages.add(pkg);
+        // The log viewer only ever renders unique (non-duplicate) entries
+        // client-side, so drop duplicates here rather than shipping every
+        // occurrence across all files — this also avoids materializing a
+        // full-size entry array for apps with many/large log files.
+        const sourceFile = path.basename(abs);
+        parseLogEntriesFiltered(abs, (e) => {
+          total++;
+          if (seenGlobal.has(e.key)) return false;
           seenGlobal.add(e.key);
-        }
+          return true;
+        }).forEach(e => uniqueEntries.push({ ...e, duplicate: false, sourceFile }));
       }
-      const unique = allEntries.filter(e => !e.duplicate).length;
       return jsonResponse(res, {
-        total: allEntries.length,
-        unique,
+        total,
+        unique: uniqueEntries.length,
         packages: [...appPackages].sort(),
-        entries: allEntries,
+        entries: uniqueEntries,
       });
     } catch (err) {
       return jsonResponse(res, { error: err.message }, 500);

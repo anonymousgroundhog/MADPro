@@ -1677,9 +1677,7 @@ return r1;</pre>
     </select>
     <div id="chatFileMeta" style="font-size:.72rem;color:var(--text-muted);white-space:nowrap;"></div>
     <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
-      <span style="font-size:.75rem;color:var(--text-muted);white-space:nowrap;">Model:</span>
-      <input type="text" id="chatModelInput" class="tools-input" style="width:180px;font-size:.78rem;" placeholder="from Settings" />
-      <button class="tools-btn-sm" onclick="chatSaveModel(this)" title="Save model to Settings">Save</button>
+      <span style="font-size:.72rem;color:var(--text-muted);white-space:nowrap;" title="Chat is powered by the Claude Code CLI using its configured default model">Powered by Claude Code</span>
       <button class="tools-btn-sm" onclick="chatClear()">Clear chat</button>
     </div>
   </div>
@@ -2419,7 +2417,6 @@ function switchTab(name) {
   if (name === 'logs')     initLogsTab();
   if (name === 'fsm')      fsmInitTab();
   if (name === 'settings') settingsInit();
-  if (name === 'chat')     chatInitTab();
 }
 
 // ── Tools tab ────────────────────────────────────────────────────────────────
@@ -6019,9 +6016,14 @@ async function chatSend() {
   if (!text) return;
   input.value = '';
 
-  // Load file context on first message or when file changes
+  // Load the currently selected file (if any). Only ONE file is ever used —
+  // the current dropdown selection; deselecting drops the context entirely.
   var filePath = document.getElementById('chatFileSelect').value;
-  if (filePath && filePath !== _chatFileName) {
+  if (!filePath) {
+    _chatFileText = '';
+    _chatFileName = '';
+    document.getElementById('chatFileMeta').textContent = '';
+  } else if (filePath !== _chatFileName) {
     try {
       var d = await api('/api/chat/file?path=' + encodeURIComponent(filePath));
       _chatFileText = d.content || '';
@@ -6029,21 +6031,27 @@ async function chatSend() {
       document.getElementById('chatFileMeta').textContent =
         d.truncated ? 'Context: ' + d.name + ' (truncated to ' + d.chars + ' chars)' : 'Context: ' + d.name;
     } catch(e) {
+      _chatFileText = '';
+      _chatFileName = '';
       chatAppendSystem('Could not load file: ' + e.message);
     }
   }
 
-  // Build user message — embed file context directly in first user turn so all models see it
-  var isFirstMsg = _chatHistory.length === 0;
-  var userContent = text;
-  if (_chatFileText && isFirstMsg) {
-    userContent = 'I have loaded the following file as context. Please answer my questions about it.\\n\\n--- FILE: ' + _chatFileName + ' ---\\n' + _chatFileText + '\\n--- END FILE ---\\n\\nMy question: ' + text;
-  }
   var systemMsg = 'You are an Android app analysis assistant. Answer questions about the provided log file or code.';
 
-  // Append to history (full content with context) but display only the user's question
-  _chatHistory.push({ role: 'user', content: userContent });
+  // History stores ONLY what the user typed — file contents never accumulate
+  // across turns or across file switches.
+  _chatHistory.push({ role: 'user', content: text });
   chatAppendBubble('user', text);
+
+  // Build the request history: attach the selected file's content to the
+  // current (last) message only, so exactly one log file is pushed per turn.
+  var sendHistory = _chatHistory.slice(0, -1);
+  var lastContent = text;
+  if (_chatFileText) {
+    lastContent = 'Use the following log file as context when answering.\\n\\n--- FILE: ' + _chatFileName + ' ---\\n' + _chatFileText + '\\n--- END FILE ---\\n\\nMy question: ' + text;
+  }
+  sendHistory = sendHistory.concat([{ role: 'user', content: lastContent }]);
 
   // Stream response
   _chatStreaming = true;
@@ -6055,7 +6063,7 @@ async function chatSend() {
     var resp = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ system: systemMsg, history: _chatHistory }),
+      body: JSON.stringify({ system: systemMsg, history: sendHistory }),
     });
     if (!resp.ok) { throw new Error(await resp.text()); }
 
@@ -6503,32 +6511,6 @@ function chatMermaidRender() {
   });
 }
 
-async function chatInitTab() {
-  // Load saved model into the inline input
-  try {
-    var s = await api('/api/settings');
-    var inp = document.getElementById('chatModelInput');
-    if (!inp.value) inp.value = s.openwebui_model || '';
-  } catch(_) {}
-}
-
-async function chatSaveModel(btn) {
-  var model = document.getElementById('chatModelInput').value.trim();
-  if (!model) return;
-  try {
-    await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ openwebui_model: model })
-    });
-    if (btn) {
-      var orig = btn.textContent;
-      btn.textContent = 'Saved';
-      btn.style.color = '#22c55e';
-      setTimeout(function() { btn.textContent = orig; btn.style.color = ''; }, 1500);
-    }
-  } catch(e) { alert('Save failed: ' + e.message); }
-}
 </script>
 </body>
 </html>`;
@@ -6664,7 +6646,13 @@ const server = http.createServer(async (req, res) => {
       const entries = fs.readdirSync(abs, { withFileTypes: true });
       const files = entries
         .filter(e => e.isFile() && e.name.toLowerCase().endsWith(".log"))
-        .map(e => ({ name: e.name, path: path.join(abs, e.name) }))
+        .map(e => {
+          const p = path.join(abs, e.name);
+          let size = 0;
+          try { size = fs.statSync(p).size; } catch {}
+          return { name: e.name, path: p, size };
+        })
+        .filter(f => f.size > 0) // skip empty log files
         .sort((a, b) => a.name.localeCompare(b.name));
       return jsonResponse(res, { dir: abs, files });
     } catch {
@@ -7731,64 +7719,124 @@ Return ONLY the Solidity source code. No markdown, no code fences, no explanatio
     }
   }
 
-  // POST /api/chat/stream — streaming chat via OpenWebUI
+  // POST /api/chat/stream — streaming chat via Claude Code CLI (headless mode).
+  // Uses whatever default model is configured in Claude Code (no --model flag).
+  // Emits OpenAI-style SSE chunks so the existing frontend parser works unchanged.
   if (req.method === "POST" && pathname === "/api/chat/stream") {
     const body = await readBody(req);
     let payload;
     try { payload = JSON.parse(body); } catch { return jsonResponse(res, { error: "Invalid JSON" }, 400); }
 
-    const { system, history, model: modelOverride } = payload;
-    const settings = loadSettings();
-    const owUrl   = (settings.openwebui_url || "http://localhost:3000").replace(/\/$/, "");
-    const owKey   = settings.openwebui_key  || "";
-    const owModel = modelOverride || settings.openwebui_model || "";
-    if (!owModel) {
+    const { system, history } = payload;
+    const histArr = Array.isArray(history) ? history : [];
+    if (!histArr.length) {
       res.writeHead(400, { "Content-Type": "text/plain" });
-      return res.end("No model configured — type one in the Model field or set one in Settings.");
+      return res.end("Empty history");
     }
 
-    const messages = [];
-    const histArr = history || [];
-    if (system) messages.push({ role: "system", content: system });
-    for (const m of histArr) messages.push({ role: m.role, content: m.content });
-
-    try {
-      const owRes = await fetch(owUrl + "/api/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(owKey ? { "Authorization": "Bearer " + owKey } : {}),
-        },
-        body: JSON.stringify({ model: owModel, messages, stream: true }),
-      });
-
-      if (!owRes.ok) {
-        const errText = await owRes.text();
-        res.writeHead(502, { "Content-Type": "text/plain" });
-        return res.end("OpenWebUI error " + owRes.status + ": " + errText.slice(0, 300));
+    // The frontend re-sends the full history each turn; the CLI is stateless
+    // per invocation, so serialize prior turns into the prompt as a transcript.
+    const last = histArr[histArr.length - 1];
+    const prior = histArr.slice(0, -1);
+    const promptParts = [];
+    if (prior.length) {
+      promptParts.push("Below is the conversation so far between the user and you (the assistant).");
+      for (const m of prior) {
+        promptParts.push((m.role === "assistant" ? "Assistant:\n" : "User:\n") + String(m.content || ""));
       }
-
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-      });
-
-      // Pipe the SSE stream from OpenWebUI directly to the client
-      const reader = owRes.body.getReader();
-      const pump = async () => {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) { res.end(); break; }
-          res.write(value);
-        }
-      };
-      req.on("close", () => reader.cancel());
-      pump().catch(() => res.end());
-    } catch (err) {
-      res.writeHead(502, { "Content-Type": "text/plain" });
-      res.end("Connection failed: " + err.message);
+      promptParts.push("Continue the conversation. Reply to the user's next message only — do not repeat the transcript.");
+      promptParts.push("User:\n" + String(last.content || ""));
+    } else {
+      promptParts.push(String(last.content || ""));
     }
+    const prompt = promptParts.join("\n\n");
+
+    const args = [
+      "-p",
+      "--output-format", "stream-json",
+      "--include-partial-messages",
+      "--verbose",
+      "--tools", "",              // pure Q&A chat — no filesystem/bash tools
+      "--safe-mode",              // skip CLAUDE.md, plugins, hooks
+      "--no-session-persistence",
+    ];
+    if (system) args.push("--system-prompt", String(system));
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    });
+    const sse = (obj) => res.write("data: " + JSON.stringify(obj) + "\n\n");
+    const sseText = (text) => sse({ choices: [{ delta: { content: text } }] });
+    const finish = () => { try { res.write("data: [DONE]\n\n"); res.end(); } catch {} };
+
+    let child;
+    try {
+      child = spawn("claude", args, { cwd: os.homedir(), env: process.env });
+    } catch (err) {
+      sseText("*Failed to launch Claude Code CLI: " + err.message + "*");
+      return finish();
+    }
+
+    child.stdin.on("error", () => {});
+    child.stdin.write(prompt);
+    child.stdin.end();
+
+    let outBuf = "";
+    let errBuf = "";
+    let sawDelta = false;
+    let emittedAny = false;
+    let finished = false;
+
+    child.stdout.on("data", (d) => {
+      outBuf += d.toString();
+      const lines = outBuf.split("\n");
+      outBuf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch { continue; }
+
+        if (ev.type === "stream_event" && ev.event) {
+          const e = ev.event;
+          if (e.type === "content_block_delta" && e.delta && e.delta.type === "text_delta" && e.delta.text) {
+            sawDelta = true;
+            emittedAny = true;
+            sseText(e.delta.text);
+          }
+        } else if (ev.type === "assistant" && ev.message && !sawDelta) {
+          // Fallback: no partial deltas were streamed (e.g. synthetic error message)
+          const blocks = ev.message.content || [];
+          for (const b of blocks) {
+            if (b.type === "text" && b.text) { emittedAny = true; sseText(b.text); }
+          }
+        } else if (ev.type === "result" && ev.is_error && !emittedAny) {
+          emittedAny = true;
+          sseText("*[Claude Code error: " + String(ev.result || ev.subtype || "unknown").slice(0, 300) + "]*");
+        }
+      }
+    });
+
+    child.stderr.on("data", (d) => { if (errBuf.length < 4000) errBuf += d.toString(); });
+
+    child.on("close", (code) => {
+      if (finished) return;
+      finished = true;
+      if (code !== 0 && !emittedAny) {
+        sseText("*[claude exited with code " + code + (errBuf ? ": " + errBuf.slice(0, 300) : "") + "]*");
+      }
+      finish();
+    });
+
+    child.on("error", (err) => {
+      if (finished) return;
+      finished = true;
+      sseText("*Failed to launch Claude Code CLI (is `claude` on the PATH?): " + err.message + "*");
+      finish();
+    });
+
+    req.on("close", () => { try { child.kill("SIGTERM"); } catch {} });
     return;
   }
 
